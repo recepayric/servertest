@@ -155,6 +155,25 @@
           flex-direction: column;
         }
       }
+
+      button {
+        font-family: inherit;
+      }
+
+      #api-result {
+        animation: fadeIn 0.3s ease;
+      }
+
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(-10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
     </style>
   </head>
   <body>
@@ -178,23 +197,46 @@
         <span>index.html</span>
       </p>
       <div class="actions">
-        <a
-          class="btn-primary"
-          href="https://render.com/docs/static-sites"
-          target="_blank"
-          rel="noreferrer"
-        >
-          View Render static docs
-        </a>
-        <a class="btn-ghost" href="/" aria-label="Reload this page">
-          Reload page
-        </a>
+        <button class="btn-primary" onclick="testAPI('/api/health')">
+          Test Health API
+        </button>
+        <button class="btn-ghost" onclick="testAPI('/api/hello')">
+          Test Hello API
+        </button>
       </div>
+      
+      <div id="api-result" style="margin-top: 20px; display: none;">
+        <div style="background: rgba(15, 23, 42, 0.9); padding: 12px; border-radius: 8px; border: 1px solid rgba(148, 163, 184, 0.3);">
+          <div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">API Response:</div>
+          <pre id="api-response" style="font-size: 11px; color: #e5e7eb; margin: 0; white-space: pre-wrap; word-break: break-all;"></pre>
+        </div>
+      </div>
+
       <p class="hint">
-        Tip: put your other files (images, CSS, JS) right next to this
-        <code>index.html</code>, commit, and push — Render serves everything
-        under your publish directory.
+        💡 <strong>REST API Testing:</strong> Click the buttons above to test your Go server endpoints. 
+        Works perfectly on Render free plan (WebSockets not supported).
       </p>
     </main>
+
+    <script>
+      async function testAPI(endpoint) {
+        const resultDiv = document.getElementById('api-result');
+        const responsePre = document.getElementById('api-response');
+        
+        resultDiv.style.display = 'block';
+        responsePre.textContent = 'Loading...';
+        
+        try {
+          const response = await fetch(endpoint);
+          const data = await response.json();
+          
+          responsePre.textContent = JSON.stringify(data, null, 2);
+          responsePre.style.color = response.ok ? '#22c55e' : '#ef4444';
+        } catch (error) {
+          responsePre.textContent = `Error: ${error.message}\n\nMake sure your Go server is running!`;
+          responsePre.style.color = '#ef4444';
+        }
+      }
+    </script>
   </body>
 </html>
