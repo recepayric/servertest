@@ -14,7 +14,7 @@ func NewMux() http.Handler {
 
 	// API endpoints
 	mux.HandleFunc("/api/health", handlers.Health)
-	// TODO: add more API routes here (e.g. auth, scores, etc.)
+	mux.HandleFunc("/api/db-health", handlers.DBHealth)
 
 	// Serve static files from the build directory (or root)
 	staticDir := "../build"
