@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/recepayric/servertest/handlers"
+	"servertest/handlers"
 )
 
 // NewMux wires all HTTP routes and static file serving.
