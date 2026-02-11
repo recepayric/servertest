@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
+
+	"servertest/db"
+	"servertest/server"
 )
 
 func main() {
@@ -14,44 +19,27 @@ func main() {
 		port = "8080" // Default port for local development
 	}
 
-	// Create a new HTTP mux
-	mux := http.NewServeMux()
+	// Initialize DB pool (lives for life of the server)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	// API endpoint
-	mux.HandleFunc("/api/health", healthHandler)
-	mux.HandleFunc("/api/hello", helloHandler)
-
-	// Serve static files from the build directory (or root)
-	staticDir := "../build"
-	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
-		staticDir = ".." // Fallback to root if build doesn't exist
+	if err := db.Init(ctx); err != nil {
+		log.Fatalf("❌ Failed to connect to database: %v", err)
 	}
+	defer db.Close()
 
-	// Serve static files
-	fileServer := http.FileServer(http.Dir(staticDir))
-	mux.Handle("/", http.StripPrefix("/", fileServer))
+	// Wire HTTP routes + static files
+	mux := server.NewMux()
 
 	// Start server
 	addr := fmt.Sprintf(":%s", port)
 	log.Printf("🚀 Server starting on port %s", port)
-	log.Printf("📁 Serving static files from: %s", staticDir)
 	log.Printf("🌐 Server running at http://localhost%s", addr)
-	
+	log.Printf("📡 API endpoints:")
+	log.Printf("   - GET http://localhost%s/api/health", addr)
+	log.Printf("   - GET http://localhost%s/api/db-health", addr)
+
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("❌ Server failed to start: %v", err)
 	}
-}
-
-// Health check endpoint
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"status":"ok","service":"go-server"}`)
-}
-
-// Hello endpoint
-func helloHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"message":"Hello from Go server!","language":"Go"}`)
 }
