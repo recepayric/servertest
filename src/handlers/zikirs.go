@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"servertest/db"
 )
 
@@ -59,7 +61,7 @@ func Zikirs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch zikirs, optionally filtered by sinceVersion
-	var rows pgxRows
+	var rows pgx.Rows
 	var err error
 	if sinceVersion > 0 {
 		rows, err = db.Pool.Query(ctx, `
