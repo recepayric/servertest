@@ -15,6 +15,7 @@ func NewMux() http.Handler {
 	// API endpoints
 	mux.HandleFunc("/api/health", handlers.Health)
 	mux.HandleFunc("/api/db-health", handlers.DBHealth)
+	mux.HandleFunc("/api/zikirs", handlers.Zikirs)
 
 	// Serve static files from the build directory (or root)
 	staticDir := "../build"
@@ -29,4 +30,3 @@ func NewMux() http.Handler {
 
 	return mux
 }
-
