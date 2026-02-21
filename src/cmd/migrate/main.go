@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS friendship_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_friendship_requests_to_user ON friendship_requests(to_user_id);
 CREATE INDEX IF NOT EXISTS idx_friendship_requests_from_user ON friendship_requests(from_user_id);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT;
 `
 	for _, stmt := range strings.Split(sql, ";") {
 		stmt = strings.TrimSpace(stmt)

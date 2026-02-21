@@ -40,6 +40,10 @@ func Init(ctx context.Context) error {
 
 	Pool = pool
 	log.Println("✅ Connected to Postgres")
+
+	// Auto-migrate: ensure display_name exists for guest registration
+	_, _ = pool.Exec(ctx, `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT`)
+
 	return nil
 }
 

@@ -50,10 +50,12 @@ func GuestRegister(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
+	displayName := "User#" + friendCode
+
 	_, err = db.Pool.Exec(ctx, `
-		INSERT INTO users (id, guest_token, friend_code, created_at)
-		VALUES (gen_random_uuid(), $1, $2, now())
-	`, guestToken, friendCode)
+		INSERT INTO users (id, guest_token, friend_code, display_name, created_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, now())
+	`, guestToken, friendCode, displayName)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to create user"})
