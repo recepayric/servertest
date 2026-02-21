@@ -4,29 +4,80 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"servertest/handlers"
 )
 
 // NewMux wires all HTTP routes and static file serving.
 func NewMux() http.Handler {
-	mux := http.NewServeMux()
-
-	// API endpoints
-	mux.HandleFunc("/api/health", handlers.Health)
-	mux.HandleFunc("/api/db-health", handlers.DBHealth)
-	mux.HandleFunc("/api/zikirs", handlers.Zikirs)
-
-	// Serve static files from the build directory (or root)
-	staticDir := "../build"
-	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
-		staticDir = ".." // Fallback to repo root if build/ doesn't exist
+	// Use custom router to avoid any ServeMux path-matching quirks
+	r := &router{
+		routes: map[string]http.HandlerFunc{
+			"GET /api/debug":                 func(w http.ResponseWriter, r *http.Request) { w.Header().Set("Content-Type", "application/json"); w.Write([]byte(`{"status":"ok","msg":"server running"}`)) },
+			"GET /api/health":                handlers.Health,
+			"GET /api/db-health":             handlers.DBHealth,
+			"GET /api/zikirs":                handlers.Zikirs,
+			"POST /api/guest/register":       handlers.GuestRegister,
+			"GET /api/friends":               handlers.FriendsList,
+			"POST /api/friends/remove":       handlers.FriendsRemove,
+			"POST /api/friends/request":      handlers.FriendsRequest,
+			"POST /api/friends/request/accept":  handlers.FriendsRequestAccept,
+			"POST /api/friends/request/refuse":  handlers.FriendsRequestRefuse,
+			"GET /api/friends/requests":      handlers.FriendsRequestList,
+			"GET /api/friends/requests/sent": handlers.FriendsRequestListSent,
+			"GET /ws":    handlers.WebSocket,
+			"GET /ws/echo": handlers.WebSocketEcho,
+		},
 	}
 
+	// File server for everything else
+	staticDir := ".."
+	if fi, err := os.Stat("../build/index.html"); err == nil && !fi.IsDir() {
+		staticDir = "../build"
+	}
 	log.Printf("📁 Serving static files from: %s", staticDir)
 
-	fileServer := http.FileServer(http.Dir(staticDir))
-	mux.Handle("/", http.StripPrefix("/", fileServer))
+	r.fileServer = http.StripPrefix("/", http.FileServer(http.Dir(staticDir)))
+	return r
+}
 
-	return mux
+type router struct {
+	routes     map[string]http.HandlerFunc
+	fileServer http.Handler
+}
+
+func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	path := req.URL.Path
+	method := req.Method
+	log.Printf("📥 %s %s", method, path)
+
+	// WebSocket upgrade uses GET
+	if strings.HasPrefix(path, "/ws") {
+		method = "GET"
+	}
+
+	key := method + " " + path
+	if h, ok := r.routes[key]; ok {
+		h(w, req)
+		return
+	}
+
+	// Try without trailing slash
+	if strings.HasSuffix(path, "/") {
+		key2 := method + " " + strings.TrimSuffix(path, "/")
+		if h, ok := r.routes[key2]; ok {
+			h(w, req)
+			return
+		}
+	}
+
+	// API path not found - log and 404
+	if strings.HasPrefix(path, "/api") || strings.HasPrefix(path, "/ws") {
+		log.Printf("❌ 404 no match for %s %s", method, path)
+		http.NotFound(w, req)
+		return
+	}
+
+	r.fileServer.ServeHTTP(w, req)
 }

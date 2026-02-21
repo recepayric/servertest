@@ -9,14 +9,6 @@ import (
 	"servertest/db"
 )
 
-type dbHealthResponse struct {
-	Status   string `json:"status"`
-	Database string `json:"database"`
-	Now      string `json:"now"`
-}
-
-// DBHealth checks that the server can reach Postgres and returns current DB time.
-// This is the endpoint your Unity app can call to verify DB connectivity.
 func DBHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -34,10 +26,9 @@ func DBHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = json.NewEncoder(w).Encode(dbHealthResponse{
-		Status:   "ok",
-		Database: "connected",
-		Now:      now.UTC().Format(time.RFC3339Nano),
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":   "ok",
+		"database": "connected",
+		"now":      now.UTC().Format(time.RFC3339Nano),
 	})
 }
-

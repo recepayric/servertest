@@ -13,13 +13,11 @@ import (
 )
 
 func main() {
-	// Get port from environment variable (Render sets this)
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080" // Default port for local development
+		port = "8080"
 	}
 
-	// Initialize DB pool (lives for life of the server)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -28,16 +26,27 @@ func main() {
 	}
 	defer db.Close()
 
-	// Wire HTTP routes + static files
 	mux := server.NewMux()
 
-	// Start server
 	addr := fmt.Sprintf(":%s", port)
 	log.Printf("🚀 Server starting on port %s", port)
 	log.Printf("🌐 Server running at http://localhost%s", addr)
 	log.Printf("📡 API endpoints:")
-	log.Printf("   - GET http://localhost%s/api/health", addr)
-	log.Printf("   - GET http://localhost%s/api/db-health", addr)
+	log.Printf("   - GET  /api/health")
+	log.Printf("   - GET  /api/db-health")
+	log.Printf("   - GET  /api/zikirs")
+	log.Printf("   - POST /api/guest/register")
+	log.Printf("   - GET  /api/friends")
+	log.Printf("   - POST /api/friends/request")
+	log.Printf("   - POST /api/friends/request/accept")
+	log.Printf("   - POST /api/friends/request/refuse")
+	log.Printf("   - GET  /api/friends/requests")
+	log.Printf("   - GET  /api/friends/requests/sent")
+	log.Printf("   - POST /api/friends/remove")
+	log.Printf("   - WS   /ws, /ws/echo")
+	log.Printf("   - GET  /api/debug (test: open in browser)")
+	log.Printf("")
+	log.Printf("💡 Every request will be logged. If you don't see 'POST /api/friends/request' in logs, the request isn't reaching this server.")
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("❌ Server failed to start: %v", err)
