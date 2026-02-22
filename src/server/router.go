@@ -19,6 +19,7 @@ func NewMux() http.Handler {
 			"GET /api/db-health":             handlers.DBHealth,
 			"GET /api/zikirs":                handlers.Zikirs,
 			"POST /api/guest/register":       handlers.GuestRegister,
+			"GET /api/me":                    handlers.Me,
 			"GET /api/friends":               handlers.FriendsList,
 			"POST /api/friends/remove":       handlers.FriendsRemove,
 			"POST /api/friends/request":      handlers.FriendsRequest,
@@ -26,6 +27,15 @@ func NewMux() http.Handler {
 			"POST /api/friends/request/refuse":  handlers.FriendsRequestRefuse,
 			"GET /api/friends/requests":      handlers.FriendsRequestList,
 			"GET /api/friends/requests/sent": handlers.FriendsRequestListSent,
+			"POST /api/groups":               handlers.GroupsCreate,
+			"GET /api/groups":                handlers.GroupsList,
+			"GET /api/groups/members":        handlers.GroupsMembers,
+			"POST /api/groups/invite":        handlers.GroupsInvite,
+			"POST /api/groups/invite/accept": handlers.GroupsInviteAccept,
+			"POST /api/groups/invite/refuse": handlers.GroupsInviteRefuse,
+			"GET /api/groups/invites":        handlers.GroupsInviteList,
+			"GET /api/groups/invites/sent":   handlers.GroupsInviteListSent,
+			"POST /api/groups/kick":          handlers.GroupsKick,
 			"GET /ws":    handlers.WebSocket,
 			"GET /ws/echo": handlers.WebSocketEcho,
 		},
@@ -50,6 +60,7 @@ type router struct {
 func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	path := req.URL.Path
 	method := req.Method
+	incRequestCount()
 	log.Printf("📥 %s %s", method, path)
 
 	// WebSocket upgrade uses GET
@@ -58,8 +69,13 @@ func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	key := method + " " + path
+	// WebSocket needs raw ResponseWriter (Hijacker); use counter for HTTP only
+	writeTo := w
+	if !strings.HasPrefix(path, "/ws") {
+		writeTo = &responseCounter{ResponseWriter: w}
+	}
 	if h, ok := r.routes[key]; ok {
-		h(w, req)
+		h(writeTo, req)
 		return
 	}
 
@@ -67,7 +83,7 @@ func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if strings.HasSuffix(path, "/") {
 		key2 := method + " " + strings.TrimSuffix(path, "/")
 		if h, ok := r.routes[key2]; ok {
-			h(w, req)
+			h(writeTo, req)
 			return
 		}
 	}
@@ -75,9 +91,9 @@ func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// API path not found - log and 404
 	if strings.HasPrefix(path, "/api") || strings.HasPrefix(path, "/ws") {
 		log.Printf("❌ 404 no match for %s %s", method, path)
-		http.NotFound(w, req)
+		http.NotFound(writeTo, req)
 		return
 	}
 
-	r.fileServer.ServeHTTP(w, req)
+	r.fileServer.ServeHTTP(writeTo, req)
 }

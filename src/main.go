@@ -6,10 +6,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime"
 	"time"
 
 	"servertest/db"
+	"servertest/metrics"
 	"servertest/server"
+	"servertest/ws"
 )
 
 func main() {
@@ -48,7 +51,38 @@ func main() {
 	log.Printf("")
 	log.Printf("💡 Every request will be logged. If you don't see 'POST /api/friends/request' in logs, the request isn't reaching this server.")
 
+	go statusReporter(5 * time.Second)
+
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("❌ Server failed to start: %v", err)
+	}
+}
+
+func statusReporter(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+
+		conns := ws.Hub.ConnectionCount()
+		reqs := server.GetAndResetRequestCount()
+		bytesOut := metrics.GetAndResetBytesOut()
+
+		allocMB := float64(m.Alloc) / 1024 / 1024
+		sysMB := float64(m.Sys) / 1024 / 1024
+		goroutines := runtime.NumGoroutine()
+
+		bytesKB := float64(bytesOut) / 1024
+		bytesStr := fmt.Sprintf("%.0fB", float64(bytesOut))
+		if bytesOut >= 1024 {
+			bytesStr = fmt.Sprintf("%.1fKB", bytesKB)
+		}
+		if bytesOut >= 1024*1024 {
+			bytesStr = fmt.Sprintf("%.1fMB", float64(bytesOut)/1024/1024)
+		}
+
+		log.Printf("📊 WS:%d reqs:%d out:%s mem:%.1fMB sys:%.1fMB goroutines:%d",
+			conns, reqs, bytesStr, allocMB, sysMB, goroutines)
 	}
 }

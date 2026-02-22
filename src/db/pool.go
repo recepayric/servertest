@@ -41,8 +41,21 @@ func Init(ctx context.Context) error {
 	Pool = pool
 	log.Println("✅ Connected to Postgres")
 
-	// Auto-migrate: ensure display_name exists for guest registration
+	// Auto-migrate
 	_, _ = pool.Exec(ctx, `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT`)
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS groups (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL, owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+		`CREATE INDEX IF NOT EXISTS idx_groups_owner ON groups(owner_id)`,
+		`CREATE TABLE IF NOT EXISTS group_members (group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE, user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (group_id, user_id))`,
+		`CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id)`,
+		`CREATE TABLE IF NOT EXISTS group_invite_requests (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE, from_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, to_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','refused')), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(group_id, to_user_id))`,
+		`CREATE INDEX IF NOT EXISTS idx_group_invites_to ON group_invite_requests(to_user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_group_invites_from ON group_invite_requests(from_user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_group_invites_group ON group_invite_requests(group_id)`,
+	} {
+		_, _ = pool.Exec(ctx, stmt)
+	}
 
 	return nil
 }

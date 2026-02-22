@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+
+	"servertest/metrics"
 )
 
 // Hub tracks WebSocket connections by user ID for push notifications.
@@ -52,6 +54,17 @@ func (h *hub) Unregister(userID string, connID string) {
 	}
 }
 
+// ConnectionCount returns the total number of active WebSocket connections.
+func (h *hub) ConnectionCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	n := 0
+	for _, chs := range h.conns {
+		n += len(chs)
+	}
+	return n
+}
+
 // Push sends a JSON message to all connections for the given user.
 func (h *hub) Push(userID string, payload interface{}) {
 	data, err := json.Marshal(payload)
@@ -59,6 +72,7 @@ func (h *hub) Push(userID string, payload interface{}) {
 		log.Printf("ws hub: marshal: %v", err)
 		return
 	}
+	metrics.AddBytesOut(uint64(len(data)))
 	h.mu.RLock()
 	channels := h.conns[userID]
 	h.mu.RUnlock()
