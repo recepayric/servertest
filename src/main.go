@@ -46,6 +46,8 @@ func main() {
 	log.Printf("   - GET  /api/friends/requests")
 	log.Printf("   - GET  /api/friends/requests/sent")
 	log.Printf("   - POST /api/friends/remove")
+	log.Printf("   - POST /api/zikirs/friend/send, GET /api/zikirs/friend, /api/zikirs/friend/requests, accept, refuse")
+	log.Printf("   - WS   zikir_read (type) for real-time read updates")
 	log.Printf("   - WS   /ws, /ws/echo")
 	log.Printf("   - GET  /api/debug (test: open in browser)")
 	log.Printf("")

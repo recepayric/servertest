@@ -84,3 +84,28 @@ func (h *hub) Push(userID string, payload interface{}) {
 		}
 	}
 }
+
+// PushToMany sends a JSON message to all connections for each of the given user IDs.
+func (h *hub) PushToMany(userIDs []string, payload interface{}) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("ws hub: marshal: %v", err)
+		return
+	}
+	metrics.AddBytesOut(uint64(len(data) * len(userIDs)))
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	seen := make(map[string]bool)
+	for _, userID := range userIDs {
+		if seen[userID] {
+			continue
+		}
+		seen[userID] = true
+		for _, send := range h.conns[userID] {
+			select {
+			case send <- data:
+			default:
+			}
+		}
+	}
+}

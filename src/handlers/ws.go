@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"time"
@@ -63,13 +64,22 @@ func WebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		// Echo back via send channel (same writer as push); enables WsTest
-		if len(msg) > 0 {
-			select {
-			case send <- msg:
-			default:
-				// channel full, skip echo
-			}
+		if len(msg) == 0 {
+			continue
+		}
+		// Handle structured messages
+		var envelope struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage  `json:"payload"`
+		}
+		if err := json.Unmarshal(msg, &envelope); err == nil && envelope.Type == "zikir_read" {
+			HandleZikirRead(userID, envelope.Payload)
+			continue
+		}
+		// Echo back for other messages (enables WsTest)
+		select {
+		case send <- msg:
+		default:
 		}
 	}
 }
