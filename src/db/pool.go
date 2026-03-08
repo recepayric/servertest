@@ -47,6 +47,21 @@ func Init(ctx context.Context) error {
 	_, _ = pool.Exec(ctx, `ALTER TABLE group_zikirs ADD COLUMN IF NOT EXISTS target_count INT DEFAULT 100`)
 	_, _ = pool.Exec(ctx, `ALTER TABLE group_zikir_requests ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'pooled'`)
 	_, _ = pool.Exec(ctx, `ALTER TABLE group_zikir_requests ADD COLUMN IF NOT EXISTS target_count INT DEFAULT 100`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE group_zikir_requests ADD COLUMN IF NOT EXISTS accepted_by_user_id UUID`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE group_zikir_requests ADD COLUMN IF NOT EXISTS refused_by_user_id UUID`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE group_zikir_requests ADD COLUMN IF NOT EXISTS group_zikir_id UUID`)
+	// Per-member accept/refuse: each member responds individually to a request
+	_, _ = pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS group_zikir_request_responses (
+		request_id UUID NOT NULL REFERENCES group_zikir_requests(id) ON DELETE CASCADE,
+		user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		response TEXT NOT NULL CHECK (response IN ('accepted','refused')),
+		reads INT NOT NULL DEFAULT 0,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+		PRIMARY KEY (request_id, user_id)
+	)`)
+	_, _ = pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_gzrr_request ON group_zikir_request_responses(request_id)`)
+	_, _ = pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_gzrr_user ON group_zikir_request_responses(user_id)`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE group_zikirs ADD COLUMN IF NOT EXISTS request_id UUID`)
 	for _, stmt := range []string{
 		`CREATE TABLE IF NOT EXISTS groups (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL, owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
 		`CREATE INDEX IF NOT EXISTS idx_groups_owner ON groups(owner_id)`,

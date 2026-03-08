@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -181,6 +184,7 @@ func CustomZikirList(w http.ResponseWriter, r *http.Request) {
 // CustomZikirGet returns a custom zikir by id. Access if: owner, or in a group that has this zikir.
 // GET /api/zikirs/custom/get?ref=xxx
 func CustomZikirGet(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[CustomZikirGet] request path=%s query=%s", r.URL.Path, r.URL.RawQuery)
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -188,6 +192,7 @@ func CustomZikirGet(w http.ResponseWriter, r *http.Request) {
 
 	userID, ok := getUserIDFromRequest(r)
 	if !ok {
+		log.Printf("[CustomZikirGet] 401: missing or invalid X-Guest-Token")
 		w.WriteHeader(http.StatusUnauthorized)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "missing or invalid X-Guest-Token"})
 		return
@@ -195,11 +200,13 @@ func CustomZikirGet(w http.ResponseWriter, r *http.Request) {
 
 	ref := r.URL.Query().Get("ref")
 	if ref == "" {
+		log.Printf("[CustomZikirGet] 400: ref required")
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "ref required"})
 		return
 	}
 
+	log.Printf("[CustomZikirGet] ref=%s userID=%s", ref, userID)
 	w.Header().Set("Content-Type", "application/json")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -225,19 +232,37 @@ func CustomZikirGet(w http.ResponseWriter, r *http.Request) {
 		FROM custom_zikirs cz
 		WHERE cz.id::text = $1
 		AND (
-			cz.user_id = $2
+			cz.user_id::text = $2
 			OR EXISTS (
 				SELECT 1 FROM group_zikirs gz
 				JOIN group_members gm ON gm.group_id = gz.group_id
-				WHERE gz.zikir_type = 'custom' AND gz.zikir_ref = $1 AND gm.user_id = $2
+				WHERE gz.zikir_type = 'custom' AND gz.zikir_ref::text = cz.id::text AND gm.user_id::text = $2
+			)
+			OR EXISTS (
+				SELECT 1 FROM group_zikir_requests gzr
+				JOIN group_members gm ON gm.group_id = gzr.group_id
+				WHERE gzr.zikir_type = 'custom' AND gzr.zikir_ref::text = cz.id::text AND gm.user_id::text = $2
+			)
+			OR EXISTS (
+				SELECT 1 FROM friend_zikirs fz
+				WHERE fz.zikir_type = 'custom' AND fz.zikir_ref::text = cz.id::text AND fz.to_user_id::text = $2
 			)
 		)
 	`, ref, userID).Scan(&e.ID, &e.NameTr, &e.NameEn, &e.ReadTr, &e.Arabic, &e.TranslationTr, &e.TranslationEn, &e.DescriptionTr, &e.DescriptionEn, &e.TargetCount, &e.Category, &tagsJSON, &e.CreatedAt)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			log.Printf("[CustomZikirGet] 404: zikir not found ref=%s userID=%s (no rows - not owner and no group/friend access)", ref, userID)
+		} else {
+			log.Printf("[CustomZikirGet] 500: db error ref=%s err=%v", ref, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "database error"})
+			return
+		}
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "zikir not found"})
 		return
 	}
+	log.Printf("[CustomZikirGet] 200: found zikir id=%s name=%s", e.ID, e.NameTr)
 	_ = json.Unmarshal(tagsJSON, &e.Tags)
 	_ = json.NewEncoder(w).Encode(e)
 }

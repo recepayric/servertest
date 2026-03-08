@@ -120,7 +120,8 @@ func FriendZikirRequestsList(w http.ResponseWriter, r *http.Request) {
 		       u.friend_code, COALESCE(u.display_name, '') as display_name
 		FROM friend_zikir_requests fzr
 		JOIN users u ON u.id = fzr.from_user_id
-		WHERE fzr.to_user_id = $1 AND fzr.status = 'pending'
+		WHERE fzr.to_user_id::text = $1 AND fzr.status = 'pending'
+		AND fzr.created_at > now() - interval '24 hours'
 		ORDER BY fzr.created_at DESC
 	`, userID)
 	if err != nil {
@@ -189,11 +190,12 @@ func FriendZikirAccept(w http.ResponseWriter, r *http.Request) {
 	err := db.Pool.QueryRow(ctx, `
 		SELECT from_user_id::text, zikir_type, zikir_ref, target_count
 		FROM friend_zikir_requests
-		WHERE id::text = $1 AND to_user_id = $2 AND status = 'pending'
+		WHERE id::text = $1 AND to_user_id::text = $2 AND status = 'pending'
+		AND created_at > now() - interval '24 hours'
 	`, body.RequestID, userID).Scan(&fromUserID, &zikirType, &zikirRef, &targetCount)
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "request not found or already handled"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "request not found, already handled, or expired (24h)"})
 		return
 	}
 
@@ -256,7 +258,8 @@ func FriendZikirRefuse(w http.ResponseWriter, r *http.Request) {
 
 	res, err := db.Pool.Exec(ctx, `
 		UPDATE friend_zikir_requests SET status = 'refused'
-		WHERE id::text = $1 AND to_user_id = $2 AND status = 'pending'
+		WHERE id::text = $1 AND to_user_id::text = $2 AND status = 'pending'
+		AND created_at > now() - interval '24 hours'
 	`, body.RequestID, userID)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -296,8 +299,9 @@ func FriendZikirList(w http.ResponseWriter, r *http.Request) {
 		SELECT fz.id::text, fz.from_user_id::text, fz.zikir_type, fz.zikir_ref, fz.target_count, fz.reads, fz.created_at::text,
 		       u.friend_code, COALESCE(u.display_name, '') as display_name
 		FROM friend_zikirs fz
+		JOIN friend_zikir_requests fzr ON fzr.id = fz.request_id
 		JOIN users u ON u.id = fz.from_user_id
-		WHERE fz.to_user_id = $1
+		WHERE fz.to_user_id::text = $1 AND fzr.created_at > now() - interval '24 hours'
 		ORDER BY fz.created_at DESC
 	`, userID)
 	if err != nil {

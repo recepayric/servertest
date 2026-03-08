@@ -14,6 +14,8 @@ func NewMux() http.Handler {
 	// Use custom router to avoid any ServeMux path-matching quirks
 	r := &router{
 		routes: map[string]http.HandlerFunc{
+			// Simple dev/test helper page
+			"GET /admin/test-friend":          handlers.TestFriendPage,
 			"GET /api/debug":                 func(w http.ResponseWriter, r *http.Request) { w.Header().Set("Content-Type", "application/json"); w.Write([]byte(`{"status":"ok","msg":"server running"}`)) },
 			"GET /api/health":                handlers.Health,
 			"GET /api/db-health":             handlers.DBHealth,
@@ -47,6 +49,7 @@ func NewMux() http.Handler {
 			"POST /api/groups/kick":          handlers.GroupsKick,
 			"POST /api/groups/leave":         handlers.GroupsLeave,
 			"GET /api/groups/zikirs":         handlers.GroupsZikirsList,
+			"GET /api/groups/zikirs/detail":  handlers.GroupsZikirDetail,
 			"POST /api/groups/zikirs/add":    handlers.GroupsZikirAdd,
 			"POST /api/groups/zikirs/remove": handlers.GroupsZikirRemove,
 			"POST /api/groups/zikirs/request": handlers.GroupsZikirRequest,
@@ -107,7 +110,7 @@ func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	// API path not found - log and 404
 	if strings.HasPrefix(path, "/api") || strings.HasPrefix(path, "/ws") {
-		log.Printf("❌ 404 no match for %s %s", method, path)
+		log.Printf("❌ 404 no match for %s %s (tried key=%q)", method, path, key)
 		http.NotFound(writeTo, req)
 		return
 	}

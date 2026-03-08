@@ -17,12 +17,13 @@ var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[
 var pooledUserID = "00000000-0000-0000-0000-000000000000"
 
 // HandleZikirRead processes a zikir read from WebSocket. Updates DB and broadcasts.
-// payload: { "target": "group"|"friend", "group_zikir_id"?: "...", "friend_zikir_id"?: "...", "count": 1 }
+// payload: { "target": "group"|"friend"|"group_request", "group_zikir_id"?, "friend_zikir_id"?, "request_id"?, "count": 1 }
 func HandleZikirRead(userID string, payload json.RawMessage) {
 	var body struct {
 		Target        string `json:"target"`
 		GroupZikirID  string `json:"group_zikir_id"`
 		FriendZikirID string `json:"friend_zikir_id"`
+		RequestID     string `json:"request_id"`
 		Count         int    `json:"count"`
 	}
 	if err := json.Unmarshal(payload, &body); err != nil {
@@ -44,6 +45,8 @@ func HandleZikirRead(userID string, payload json.RawMessage) {
 		handleGroupZikirRead(ctx, userID, body.GroupZikirID, body.Count)
 	case "friend":
 		handleFriendZikirRead(ctx, userID, body.FriendZikirID, body.Count)
+	case "group_request":
+		handleGroupRequestZikirRead(ctx, userID, body.RequestID, body.Count)
 	default:
 		log.Printf("zikir_read: unknown target %q", body.Target)
 	}
@@ -63,11 +66,16 @@ func handleGroupZikirRead(ctx context.Context, userID, groupZikirID string, coun
 	err := db.Pool.QueryRow(ctx, `
 		SELECT gz.group_id::text, COALESCE(gz.mode, 'pooled')
 		FROM group_zikirs gz
+		LEFT JOIN group_zikir_requests gzr ON gzr.id = gz.request_id
 		JOIN group_members gm ON gm.group_id = gz.group_id
 		WHERE gz.id::text = $1 AND gm.user_id::text = $2
+		AND (
+			(gz.request_id IS NULL AND gz.created_at > now() - interval '24 hours')
+			OR (gz.request_id IS NOT NULL AND gzr.created_at > now() - interval '24 hours')
+		)
 	`, groupZikirID, userID).Scan(&groupID, &mode)
 	if err != nil {
-		log.Printf("zikir_read: group zikir not found or not member: %v", err)
+		log.Printf("zikir_read: group zikir not found, not member, or expired: %v", err)
 		return
 	}
 
@@ -153,11 +161,13 @@ func handleFriendZikirRead(ctx context.Context, userID, friendZikirID string, co
 
 	var fromUserID string
 	err := db.Pool.QueryRow(ctx, `
-		SELECT from_user_id::text FROM friend_zikirs
-		WHERE id::text = $1 AND to_user_id::text = $2
+		SELECT fz.from_user_id::text FROM friend_zikirs fz
+		JOIN friend_zikir_requests fzr ON fzr.id = fz.request_id
+		WHERE fz.id::text = $1 AND fz.to_user_id::text = $2
+		AND fzr.created_at > now() - interval '24 hours'
 	`, friendZikirID, userID).Scan(&fromUserID)
 	if err != nil {
-		log.Printf("zikir_read: friend zikir not found or not receiver: %v", err)
+		log.Printf("zikir_read: friend zikir not found, not receiver, or expired: %v", err)
 		return
 	}
 
@@ -181,4 +191,62 @@ func handleFriendZikirRead(ctx context.Context, userID, friendZikirID string, co
 
 	ws.Hub.Push(userID, payload)
 	ws.Hub.Push(fromUserID, payload)
+}
+
+// handleGroupRequestZikirRead updates reads for a user's accepted group request instance.
+func handleGroupRequestZikirRead(ctx context.Context, userID, requestID string, count int) {
+	if requestID == "" {
+		log.Printf("zikir_read: request_id required for target=group_request")
+		return
+	}
+	if !uuidRe.MatchString(requestID) {
+		log.Printf("zikir_read: invalid request_id")
+		return
+	}
+
+	var groupID string
+	err := db.Pool.QueryRow(ctx, `
+		SELECT gzr.group_id::text FROM group_zikir_requests gzr
+		JOIN group_zikir_request_responses r ON r.request_id = gzr.id AND r.user_id::text = $1 AND r.response = 'accepted'
+		WHERE gzr.id::text = $2 AND gzr.created_at > now() - interval '24 hours'
+	`, userID, requestID).Scan(&groupID)
+	if err != nil {
+		log.Printf("zikir_read: group_request not found, not accepted by user, or expired: %v", err)
+		return
+	}
+
+	_, err = db.Pool.Exec(ctx, `
+		UPDATE group_zikir_request_responses SET reads = reads + $1
+		WHERE request_id::text = $2 AND user_id::text = $3 AND response = 'accepted'
+	`, count, requestID, userID)
+	if err != nil {
+		log.Printf("zikir_read: update group_request progress: %v", err)
+		return
+	}
+
+	var reads int
+	_ = db.Pool.QueryRow(ctx, `SELECT reads FROM group_zikir_request_responses WHERE request_id::text = $1 AND user_id::text = $2`, requestID, userID).Scan(&reads)
+
+	rows, _ := db.Pool.Query(ctx, `SELECT user_id::text FROM group_members WHERE group_id = $1`, groupID)
+	var userIDs []string
+	if rows != nil {
+		for rows.Next() {
+			var u string
+			if err := rows.Scan(&u); err == nil {
+				userIDs = append(userIDs, u)
+			}
+		}
+		rows.Close()
+	}
+	if len(userIDs) > 0 {
+		ws.Hub.PushToMany(userIDs, map[string]interface{}{
+			"type": "zikir_read_update",
+			"payload": map[string]interface{}{
+				"target":    "group_request",
+				"request_id": requestID,
+				"user_id":    userID,
+				"reads":      reads,
+			},
+		})
+	}
 }
