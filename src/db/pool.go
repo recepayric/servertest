@@ -62,6 +62,8 @@ func Init(ctx context.Context) error {
 	_, _ = pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_gzrr_request ON group_zikir_request_responses(request_id)`)
 	_, _ = pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_gzrr_user ON group_zikir_request_responses(user_id)`)
 	_, _ = pool.Exec(ctx, `ALTER TABLE group_zikirs ADD COLUMN IF NOT EXISTS request_id UUID`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE groups ADD COLUMN IF NOT EXISTS icon_index INTEGER NOT NULL DEFAULT -1`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE groups ADD COLUMN IF NOT EXISTS icon_key TEXT NOT NULL DEFAULT ''`)
 	for _, stmt := range []string{
 		`CREATE TABLE IF NOT EXISTS groups (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL, owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
 		`CREATE INDEX IF NOT EXISTS idx_groups_owner ON groups(owner_id)`,

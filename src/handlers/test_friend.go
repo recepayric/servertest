@@ -96,6 +96,33 @@ func TestFriendPage(w http.ResponseWriter, r *http.Request) {
     <div class="row"><h3 style="font-size:13px;margin-bottom:4px;">Log</h3><div class="log" id="membersLog"></div></div>
   </section>
 
+  <!-- ───────── SECTION 4: Send Random Zikir to Group ───────── -->
+  <section>
+    <h2>④ Send Random Zikir to Group</h2>
+    <p>Creates a random custom zikir and requests it for the group. Uses the owner token and group id auto-filled from section ②.</p>
+
+    <label for="zikirOwnerToken">Owner guest_token</label>
+    <input id="zikirOwnerToken" type="text" placeholder="paste owner token (auto-filled from ②)"/>
+
+    <label for="zikirGroupId">Group ID</label>
+    <input id="zikirGroupId" type="text" placeholder="paste group_id (auto-filled from ②)"/>
+
+    <label for="zikirName">Zikir name</label>
+    <input id="zikirName" type="text" placeholder="leave blank for random"/>
+
+    <label for="zikirPhrase">Zikir phrase (how to read)</label>
+    <input id="zikirPhrase" type="text" placeholder="leave blank for random"/>
+
+    <label for="zikirCount">Count (target reads)</label>
+    <input id="zikirCount" type="number" value="33" min="1" style="width:80px"/>
+
+    <br/>
+    <button class="btn" onclick="randomFill()">🎲 Randomise fields</button>
+    <button class="btn secondary" onclick="sendZikirToGroup()">Send zikir to group</button>
+
+    <div class="row"><h3 style="font-size:13px;margin-bottom:4px;">Log</h3><div class="log" id="zikirLog"></div></div>
+  </section>
+
 <script>
 // ─── helpers ───────────────────────────────────────────────────────────────
 async function register() {
@@ -181,10 +208,12 @@ async function createGroupAndInvite() {
       L('Group invite failed (target must accept the friend request first): ' + e, true);
     }
 
-    L('─ Owner token for section ③: ' + owner.guest_token);
-    L('─ Group id  for section ③: ' + grp.group_id);
-    document.getElementById('ownerToken').value   = owner.guest_token;
-    document.getElementById('targetGroupId').value = grp.group_id;
+    L('─ Owner token for section ③ & ④: ' + owner.guest_token);
+    L('─ Group id  for section ③ & ④: ' + grp.group_id);
+    document.getElementById('ownerToken').value      = owner.guest_token;
+    document.getElementById('targetGroupId').value   = grp.group_id;
+    document.getElementById('zikirOwnerToken').value = owner.guest_token;
+    document.getElementById('zikirGroupId').value    = grp.group_id;
 
   } catch(e) {
     L(String(e), true);
@@ -247,6 +276,64 @@ async function addRandomMembers() {
 
   L('Done. ' + count + ' member(s) processed.');
   btn.disabled = false;
+}
+
+// ─── Section 4: Send Random Zikir to Group ─────────────────────────────────
+const ZIKIR_NAMES   = ['Sübhanallah','Elhamdülillah','Allahü Ekber','Estağfirullah','La ilahe illallah','Bismillah','Salavat','Ya Rab','Ya Rahîm','Hasbunallah'];
+const ZIKIR_PHRASES = ['Sübhânellahi ve bi hamdihî','Elhamdülillâhi Rabbil âlemin','Allâhü ekber','Estağfirullâhe\'l-azîm','Lâ ilâhe illallâhü vahdehû lâ şerîke leh','Bismillâhirrahmânirrahîm','Allâhümme salli alâ seyyidinâ Muhammed','Hasbünallâhü ve ni\'mel vekîl','Sübhânallâhi ve bi hamdihî sübhânallâhi\'l-azîm','Lâ havle ve lâ kuvvete illâ billâhil aliyyil azîm'];
+const COUNTS = [33, 99, 100, 1000, 3000];
+
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+function randomFill() {
+  document.getElementById('zikirName').value   = pick(ZIKIR_NAMES) + ' #' + rand(1, 999);
+  document.getElementById('zikirPhrase').value = pick(ZIKIR_PHRASES);
+  document.getElementById('zikirCount').value  = pick(COUNTS);
+}
+
+async function sendZikirToGroup() {
+  const ownerToken = document.getElementById('zikirOwnerToken').value.trim();
+  const groupId    = document.getElementById('zikirGroupId').value.trim();
+  let   name       = document.getElementById('zikirName').value.trim();
+  let   phrase     = document.getElementById('zikirPhrase').value.trim();
+  let   count      = parseInt(document.getElementById('zikirCount').value, 10) || 33;
+
+  if (!ownerToken) { alert('Paste the owner guest_token.'); return; }
+  if (!groupId)    { alert('Paste the group_id.');         return; }
+
+  // Auto-fill random values if left blank
+  if (!name)   name   = pick(ZIKIR_NAMES)   + ' #' + rand(1, 999);
+  if (!phrase) phrase = pick(ZIKIR_PHRASES);
+
+  const btn = event.target;
+  btn.disabled = true;
+  document.getElementById('zikirLog').innerHTML = '';
+  const L = (msg, err) => log('zikirLog', msg, err);
+
+  try {
+    // 1) Create a custom zikir. arabic is required by the server; reuse phrase.
+    const zikirResp = await api('POST', '/api/zikirs/custom', ownerToken, {
+      name_tr:      name,
+      read_tr:      phrase,
+      arabic:       phrase,   // server requires arabic; use phrase as stand-in
+      target_count: count,
+    });
+    const zikirId = zikirResp.zikir_id || zikirResp.id;
+    L('Custom zikir created  id=' + zikirId + '  name=' + name + '  count=' + count);
+
+    // 2) Request the zikir for the group
+    const reqResp = await api('POST', '/api/groups/zikirs/request', ownerToken, {
+      group_id:     groupId,
+      zikir_type:   'custom',
+      zikir_ref:    zikirId,
+      mode:         'pooled',
+      target_count: count,
+    });
+    L('Group zikir request sent  request_id=' + reqResp.request_id + '  mode=' + reqResp.mode);
+  } catch(e) {
+    L('Error: ' + e, true);
+  } finally { btn.disabled = false; }
 }
 </script>
 </body>

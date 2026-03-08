@@ -25,8 +25,12 @@ func GroupsCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Name string `json:"name"`
+		Name      string `json:"name"`
+		IconIndex int    `json:"icon_index"`
+		IconKey   string `json:"icon_key"`
 	}
+	// Default -1 = no icon
+	body.IconIndex = -1
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "name required"})
@@ -39,9 +43,9 @@ func GroupsCreate(w http.ResponseWriter, r *http.Request) {
 
 	var groupID string
 	err := db.Pool.QueryRow(ctx, `
-		INSERT INTO groups (name, owner_id) VALUES ($1, $2)
+		INSERT INTO groups (name, owner_id, icon_index, icon_key) VALUES ($1, $2, $3, $4)
 		RETURNING id::text
-	`, body.Name, userID).Scan(&groupID)
+	`, body.Name, userID, body.IconIndex, body.IconKey).Scan(&groupID)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to create group"})
@@ -52,17 +56,21 @@ func GroupsCreate(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":   "ok",
-		"group_id": groupID,
-		"name":     body.Name,
-		"owner_id": userID,
+		"status":     "ok",
+		"group_id":   groupID,
+		"name":       body.Name,
+		"owner_id":   userID,
+		"icon_index": body.IconIndex,
+		"icon_key":   body.IconKey,
 	})
 }
 
 type groupEntry struct {
-	GroupID string `json:"group_id"`
-	Name    string `json:"name"`
-	OwnerID string `json:"owner_id"`
+	GroupID        string `json:"group_id"`
+	Name           string `json:"name"`
+	OwnerID        string `json:"owner_id"`
+	GroupIconIndex int    `json:"group_icon_index"`
+	GroupIconKey   string `json:"group_icon_key"`
 }
 
 // GroupsList returns groups the user is a member of.
@@ -84,7 +92,7 @@ func GroupsList(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	rows, err := db.Pool.Query(ctx, `
-		SELECT g.id::text, g.name, g.owner_id::text
+		SELECT g.id::text, g.name, g.owner_id::text, g.icon_index, g.icon_key
 		FROM groups g
 		JOIN group_members gm ON gm.group_id = g.id
 		WHERE gm.user_id = $1
@@ -100,7 +108,7 @@ func GroupsList(w http.ResponseWriter, r *http.Request) {
 	var groups []groupEntry
 	for rows.Next() {
 		var e groupEntry
-		if err := rows.Scan(&e.GroupID, &e.Name, &e.OwnerID); err != nil {
+		if err := rows.Scan(&e.GroupID, &e.Name, &e.OwnerID, &e.GroupIconIndex, &e.GroupIconKey); err != nil {
 			continue
 		}
 		groups = append(groups, e)
@@ -227,15 +235,6 @@ func GroupsInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Must be friends
-	var friendExists bool
-	_ = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM friendships WHERE user_id = $1 AND friend_id = $2)`, userID, toID).Scan(&friendExists)
-	if !friendExists {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "can only invite friends"})
-		return
-	}
-
 	// Already member?
 	var memberExists bool
 	_ = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2)`, body.GroupID, toID).Scan(&memberExists)
@@ -270,18 +269,21 @@ func GroupsInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var groupName, fromCode, fromName string
-	_ = db.Pool.QueryRow(ctx, `SELECT name FROM groups WHERE id::text = $1`, body.GroupID).Scan(&groupName)
+	var groupName, fromCode, fromName, iconKey string
+	var iconIndex int
+	_ = db.Pool.QueryRow(ctx, `SELECT name, icon_index, icon_key FROM groups WHERE id::text = $1`, body.GroupID).Scan(&groupName, &iconIndex, &iconKey)
 	_ = db.Pool.QueryRow(ctx, `SELECT friend_code, COALESCE(display_name, '') FROM users WHERE id = $1`, userID).Scan(&fromCode, &fromName)
 
 	ws.Hub.Push(toID, map[string]interface{}{
 		"type": "group_invite",
 		"payload": map[string]interface{}{
-			"request_id":       requestID,
-			"group_id":         body.GroupID,
-			"group_name":       groupName,
-			"from_user_id":     userID,
-			"from_friend_code": fromCode,
+			"request_id":        requestID,
+			"group_id":          body.GroupID,
+			"group_name":        groupName,
+			"group_icon_index":  iconIndex,
+			"group_icon_key":    iconKey,
+			"from_user_id":      userID,
+			"from_friend_code":  fromCode,
 			"from_display_name": fromName,
 		},
 	})
@@ -430,7 +432,7 @@ func GroupsInviteList(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	rows, err := db.Pool.Query(ctx, `
-		SELECT gir.id::text, gir.group_id::text, g.name, u.id::text, u.friend_code, COALESCE(u.display_name, ''), gir.created_at::text
+		SELECT gir.id::text, gir.group_id::text, g.name, g.icon_index, g.icon_key, u.id::text, u.friend_code, COALESCE(u.display_name, ''), gir.created_at::text
 		FROM group_invite_requests gir
 		JOIN groups g ON g.id = gir.group_id
 		JOIN users u ON u.id = gir.from_user_id
@@ -448,6 +450,8 @@ func GroupsInviteList(w http.ResponseWriter, r *http.Request) {
 		RequestID       string `json:"request_id"`
 		GroupID         string `json:"group_id"`
 		GroupName       string `json:"group_name"`
+		GroupIconIndex  int    `json:"group_icon_index"`
+		GroupIconKey    string `json:"group_icon_key"`
 		FromUserID      string `json:"from_user_id"`
 		FromFriendCode  string `json:"from_friend_code"`
 		FromDisplayName string `json:"from_display_name"`
@@ -457,7 +461,7 @@ func GroupsInviteList(w http.ResponseWriter, r *http.Request) {
 	var list []inviteItem
 	for rows.Next() {
 		var e inviteItem
-		if err := rows.Scan(&e.RequestID, &e.GroupID, &e.GroupName, &e.FromUserID, &e.FromFriendCode, &e.FromDisplayName, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.RequestID, &e.GroupID, &e.GroupName, &e.GroupIconIndex, &e.GroupIconKey, &e.FromUserID, &e.FromFriendCode, &e.FromDisplayName, &e.CreatedAt); err != nil {
 			continue
 		}
 		list = append(list, e)
@@ -488,7 +492,7 @@ func GroupsInviteListSent(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	rows, err := db.Pool.Query(ctx, `
-		SELECT gir.id::text, gir.group_id::text, g.name, u.id::text, u.friend_code, COALESCE(u.display_name, '')
+		SELECT gir.id::text, gir.group_id::text, g.name, g.icon_index, g.icon_key, u.id::text, u.friend_code, COALESCE(u.display_name, '')
 		FROM group_invite_requests gir
 		JOIN groups g ON g.id = gir.group_id
 		JOIN users u ON u.id = gir.to_user_id
@@ -503,18 +507,20 @@ func GroupsInviteListSent(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type sentItem struct {
-		RequestID  string `json:"request_id"`
-		GroupID    string `json:"group_id"`
-		GroupName  string `json:"group_name"`
-		UserID     string `json:"user_id"`
-		FriendCode string `json:"friend_code"`
+		RequestID   string `json:"request_id"`
+		GroupID     string `json:"group_id"`
+		GroupName   string `json:"group_name"`
+		GroupIconIndex int `json:"group_icon_index"`
+		GroupIconKey   string `json:"group_icon_key"`
+		UserID      string `json:"user_id"`
+		FriendCode  string `json:"friend_code"`
 		DisplayName string `json:"display_name"`
 	}
 
 	var list []sentItem
 	for rows.Next() {
 		var e sentItem
-		if err := rows.Scan(&e.RequestID, &e.GroupID, &e.GroupName, &e.UserID, &e.FriendCode, &e.DisplayName); err != nil {
+		if err := rows.Scan(&e.RequestID, &e.GroupID, &e.GroupName, &e.GroupIconIndex, &e.GroupIconKey, &e.UserID, &e.FriendCode, &e.DisplayName); err != nil {
 			continue
 		}
 		list = append(list, e)
