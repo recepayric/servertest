@@ -96,6 +96,34 @@ func TestFriendPage(w http.ResponseWriter, r *http.Request) {
     <div class="row"><h3 style="font-size:13px;margin-bottom:4px;">Log</h3><div class="log" id="membersLog"></div></div>
   </section>
 
+  <!-- ───────── SECTION 5: Send Random Friend Zikir ───────── -->
+  <section>
+    <h2>⑤ Send Random Friend Zikir</h2>
+    <p>Creates a sender guest, creates a random custom zikir, and sends a zikir request to the target user.<br/>
+       Friendship is not required — the target user will receive the request via WebSocket immediately.</p>
+
+    <label for="fzTargetCode">Target friend code (your Unity app)</label>
+    <input id="fzTargetCode" type="text" placeholder="e.g. 3x7k2m"/>
+
+    <label for="fzSenderToken">Sender guest_token (leave blank to auto-create)</label>
+    <input id="fzSenderToken" type="text" placeholder="auto-created if blank"/>
+
+    <label for="fzName">Zikir name</label>
+    <input id="fzName" type="text" placeholder="leave blank for random"/>
+
+    <label for="fzPhrase">Zikir phrase</label>
+    <input id="fzPhrase" type="text" placeholder="leave blank for random"/>
+
+    <label for="fzCount">Count (target reads)</label>
+    <input id="fzCount" type="number" value="33" min="1" style="width:80px"/>
+
+    <br/>
+    <button class="btn" onclick="randomFillFriend()">🎲 Randomise fields</button>
+    <button class="btn secondary" onclick="sendFriendZikir()">Send zikir to friend</button>
+
+    <div class="row"><h3 style="font-size:13px;margin-bottom:4px;">Log</h3><div class="log" id="fzLog"></div></div>
+  </section>
+
   <!-- ───────── SECTION 4: Send Random Zikir to Group ───────── -->
   <section>
     <h2>④ Send Random Zikir to Group</h2>
@@ -276,6 +304,67 @@ async function addRandomMembers() {
 
   L('Done. ' + count + ' member(s) processed.');
   btn.disabled = false;
+}
+
+// ─── Section 5: Send Random Friend Zikir ───────────────────────────────────
+function randomFillFriend() {
+  document.getElementById('fzName').value   = pick(ZIKIR_NAMES) + ' #' + rand(1, 999);
+  document.getElementById('fzPhrase').value = pick(ZIKIR_PHRASES);
+  document.getElementById('fzCount').value  = pick(COUNTS);
+}
+
+async function sendFriendZikir() {
+  const targetCode = document.getElementById('fzTargetCode').value.trim();
+  if (!targetCode) { alert('Enter the target friend code.'); return; }
+
+  let   senderToken = document.getElementById('fzSenderToken').value.trim();
+  let   name        = document.getElementById('fzName').value.trim();
+  let   phrase      = document.getElementById('fzPhrase').value.trim();
+  let   count       = parseInt(document.getElementById('fzCount').value, 10) || 33;
+
+  if (!name)   name   = pick(ZIKIR_NAMES) + ' #' + rand(1, 999);
+  if (!phrase) phrase = pick(ZIKIR_PHRASES);
+
+  const btn = event.target;
+  btn.disabled = true;
+  document.getElementById('fzLog').innerHTML = '';
+  const L = (msg, err) => log('fzLog', msg, err);
+
+  try {
+    // 1) Create sender guest if no token provided
+    if (!senderToken) {
+      const sender = await register();
+      senderToken = sender.guest_token;
+      document.getElementById('fzSenderToken').value = senderToken;
+      L('Sender created  token=' + senderToken + '  code=' + sender.friend_code);
+    }
+
+    // 2) Resolve target user_id by sending them a friend request (side-effect is fine for testing)
+    const frResp  = await api('POST', '/api/friends/request', senderToken, { friend_code: targetCode });
+    const toUserId = frResp.friend_id;
+    L('Target resolved  user_id=' + toUserId + '  code=' + targetCode);
+
+    // 3) Create custom zikir
+    const zikirResp = await api('POST', '/api/zikirs/custom', senderToken, {
+      name_tr:      name,
+      read_tr:      phrase,
+      arabic:       phrase,   // server requires arabic; reuse phrase
+      target_count: count,
+    });
+    const zikirId = zikirResp.zikir_id || zikirResp.id;
+    L('Custom zikir created  id=' + zikirId + '  name=' + name + '  count=' + count);
+
+    // 4) Send friend zikir request to target
+    const sendResp = await api('POST', '/api/zikirs/friend/send', senderToken, {
+      to_user_id:   toUserId,
+      zikir_type:   'custom',
+      zikir_ref:    zikirId,
+      target_count: count,
+    });
+    L('Friend zikir sent!  request_id=' + sendResp.request_id + '  →  target should see it live via WebSocket');
+  } catch(e) {
+    L('Error: ' + e, true);
+  } finally { btn.disabled = false; }
 }
 
 // ─── Section 4: Send Random Zikir to Group ─────────────────────────────────

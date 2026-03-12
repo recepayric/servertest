@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -138,14 +141,21 @@ func FriendsRequestAccept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read body once so we can log it on failure
+	rawBody, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(rawBody))
+	log.Printf("📥 FriendsRequestAccept body: %s | Content-Type: %s | user: %s", string(rawBody), r.Header.Get("Content-Type"), userID)
+
 	var body struct {
 		RequestID string `json:"request_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RequestID == "" {
+	if err := json.NewDecoder(bytes.NewReader(rawBody)).Decode(&body); err != nil || body.RequestID == "" {
+		log.Printf("❌ FriendsRequestAccept 400 — decode_err=%v request_id=%q raw=%s", err, body.RequestID, string(rawBody))
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "request_id required"})
 		return
 	}
+	log.Printf("✅ FriendsRequestAccept — request_id=%s user=%s", body.RequestID, userID)
 
 	w.Header().Set("Content-Type", "application/json")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -201,10 +211,14 @@ func FriendsRequestRefuse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rawBody, _ := io.ReadAll(r.Body)
+	log.Printf("📥 FriendsRequestRefuse body: %s | user: %s", string(rawBody), userID)
+
 	var body struct {
 		RequestID string `json:"request_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RequestID == "" {
+	if err := json.NewDecoder(bytes.NewReader(rawBody)).Decode(&body); err != nil || body.RequestID == "" {
+		log.Printf("❌ FriendsRequestRefuse 400 — decode_err=%v request_id=%q raw=%s", err, body.RequestID, string(rawBody))
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "request_id required"})
 		return

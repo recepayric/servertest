@@ -28,6 +28,7 @@ func NewMux() http.Handler {
 			"GET /api/zikirs/friend/requests": handlers.FriendZikirRequestsList,
 			"POST /api/zikirs/friend/accept": handlers.FriendZikirAccept,
 			"POST /api/zikirs/friend/refuse": handlers.FriendZikirRefuse,
+			"GET /api/zikirs/friend/sent":     handlers.FriendZikirSentList,
 			"GET /api/zikirs/friend":         handlers.FriendZikirList,
 			"POST /api/guest/register":       handlers.GuestRegister,
 			"GET /api/me":                    handlers.Me,

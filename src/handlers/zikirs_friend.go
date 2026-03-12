@@ -52,19 +52,6 @@ func FriendZikirSend(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	// Must be friends
-	var areFriends bool
-	_ = db.Pool.QueryRow(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM friendships WHERE (user_id = $1 AND friend_id = $2) OR (user_id = $2 AND friend_id = $1)
-		)
-	`, fromID, body.ToUserID).Scan(&areFriends)
-	if !areFriends {
-		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "can only send to friends"})
-		return
-	}
-
 	var requestID string
 	err := db.Pool.QueryRow(ctx, `
 		INSERT INTO friend_zikir_requests (from_user_id, to_user_id, zikir_type, zikir_ref, target_count)
@@ -77,7 +64,18 @@ func FriendZikirSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve human-readable name to include in the push
+	var zikirName string
+	if body.ZikirType == "custom" {
+		_ = db.Pool.QueryRow(ctx, `SELECT COALESCE(name_tr, $1) FROM custom_zikirs WHERE id::text = $1`, body.ZikirRef).Scan(&zikirName)
+	}
+	if zikirName == "" {
+		zikirName = body.ZikirRef
+	}
+
 	// Notify friend
+	var fromCode, fromName string
+	_ = db.Pool.QueryRow(ctx, `SELECT friend_code, COALESCE(display_name, '') FROM users WHERE id = $1`, fromID).Scan(&fromCode, &fromName)
 	ws.Hub.Push(body.ToUserID, map[string]interface{}{
 		"type": "friend_zikir_request",
 		"payload": map[string]interface{}{
@@ -85,7 +83,10 @@ func FriendZikirSend(w http.ResponseWriter, r *http.Request) {
 			"from_user_id": fromID,
 			"zikir_type":   body.ZikirType,
 			"zikir_ref":    body.ZikirRef,
+			"zikir_name":   zikirName,
 			"target_count": body.TargetCount,
+			"friend_code":  fromCode,
+			"display_name": fromName,
 		},
 	})
 
@@ -116,10 +117,13 @@ func FriendZikirRequestsList(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	rows, err := db.Pool.Query(ctx, `
-		SELECT fzr.id::text, fzr.from_user_id::text, fzr.zikir_type, fzr.zikir_ref, fzr.target_count, fzr.created_at::text,
+		SELECT fzr.id::text, fzr.from_user_id::text, fzr.zikir_type, fzr.zikir_ref,
+		       COALESCE(cz.name_tr, fzr.zikir_ref, '?') AS zikir_name,
+		       fzr.target_count, fzr.created_at::text,
 		       u.friend_code, COALESCE(u.display_name, '') as display_name
 		FROM friend_zikir_requests fzr
 		JOIN users u ON u.id = fzr.from_user_id
+		LEFT JOIN custom_zikirs cz ON cz.id::text = fzr.zikir_ref AND fzr.zikir_type = 'custom'
 		WHERE fzr.to_user_id::text = $1 AND fzr.status = 'pending'
 		AND fzr.created_at > now() - interval '24 hours'
 		ORDER BY fzr.created_at DESC
@@ -136,6 +140,7 @@ func FriendZikirRequestsList(w http.ResponseWriter, r *http.Request) {
 		FromUserID  string `json:"from_user_id"`
 		ZikirType   string `json:"zikir_type"`
 		ZikirRef    string `json:"zikir_ref"`
+		ZikirName   string `json:"zikir_name"`
 		TargetCount int    `json:"target_count"`
 		CreatedAt   string `json:"created_at"`
 		FriendCode  string `json:"friend_code"`
@@ -145,7 +150,7 @@ func FriendZikirRequestsList(w http.ResponseWriter, r *http.Request) {
 	var list []reqEntry
 	for rows.Next() {
 		var e reqEntry
-		if err := rows.Scan(&e.RequestID, &e.FromUserID, &e.ZikirType, &e.ZikirRef, &e.TargetCount, &e.CreatedAt, &e.FriendCode, &e.DisplayName); err != nil {
+		if err := rows.Scan(&e.RequestID, &e.FromUserID, &e.ZikirType, &e.ZikirRef, &e.ZikirName, &e.TargetCount, &e.CreatedAt, &e.FriendCode, &e.DisplayName); err != nil {
 			continue
 		}
 		list = append(list, e)
@@ -276,6 +281,94 @@ func FriendZikirRefuse(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// FriendZikirSentList returns outgoing friend zikir requests sent by the current user.
+// Includes live read count when the recipient has accepted.
+// GET /api/zikirs/friend/sent
+func FriendZikirSentList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	userID, ok := getUserIDFromRequest(r)
+	if !ok {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "missing or invalid X-Guest-Token"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	rows, err := db.Pool.Query(ctx, `
+		SELECT
+			fzr.id::text,
+			fzr.to_user_id::text,
+			fzr.zikir_type,
+			fzr.zikir_ref,
+			COALESCE(cz.name_tr, fzr.zikir_ref, '?') AS zikir_name,
+			fzr.target_count,
+			fzr.status,
+			fzr.created_at::text,
+			u.friend_code AS to_friend_code,
+			COALESCE(u.display_name, '') AS to_display_name,
+			COALESCE(fz.id::text, '') AS friend_zikir_id,
+			COALESCE(fz.reads, 0) AS reads,
+			(fz.id IS NOT NULL AND fz.reads >= fzr.target_count) AS is_completed
+		FROM friend_zikir_requests fzr
+		JOIN users u ON u.id = fzr.to_user_id
+		LEFT JOIN friend_zikirs fz ON fz.request_id = fzr.id
+		LEFT JOIN custom_zikirs cz
+			ON cz.id::text = fzr.zikir_ref AND fzr.zikir_type = 'custom'
+		WHERE fzr.from_user_id::text = $1
+		  AND fzr.created_at > now() - interval '24 hours'
+		ORDER BY fzr.created_at DESC
+		LIMIT 10
+	`, userID)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to list sent zikirs"})
+		return
+	}
+	defer rows.Close()
+
+	type sentEntry struct {
+		RequestID     string `json:"request_id"`
+		ToUserID      string `json:"to_user_id"`
+		ZikirType     string `json:"zikir_type"`
+		ZikirRef      string `json:"zikir_ref"`
+		ZikirName     string `json:"zikir_name"`
+		TargetCount   int    `json:"target_count"`
+		Status        string `json:"status"`
+		CreatedAt     string `json:"created_at"`
+		ToFriendCode  string `json:"to_friend_code"`
+		ToDisplayName string `json:"to_display_name"`
+		FriendZikirID string `json:"friend_zikir_id"`
+		Reads         int    `json:"reads"`
+		IsCompleted   bool   `json:"is_completed"`
+	}
+
+	var list []sentEntry
+	for rows.Next() {
+		var e sentEntry
+		if err := rows.Scan(
+			&e.RequestID, &e.ToUserID, &e.ZikirType, &e.ZikirRef, &e.ZikirName,
+			&e.TargetCount, &e.Status, &e.CreatedAt,
+			&e.ToFriendCode, &e.ToDisplayName,
+			&e.FriendZikirID, &e.Reads, &e.IsCompleted,
+		); err != nil {
+			continue
+		}
+		list = append(list, e)
+	}
+	if list == nil {
+		list = []sentEntry{}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"sent": list})
+}
+
 // FriendZikirList returns accepted friend zikirs (that user can read).
 // GET /api/zikirs/friend
 func FriendZikirList(w http.ResponseWriter, r *http.Request) {
@@ -301,8 +394,11 @@ func FriendZikirList(w http.ResponseWriter, r *http.Request) {
 		FROM friend_zikirs fz
 		JOIN friend_zikir_requests fzr ON fzr.id = fz.request_id
 		JOIN users u ON u.id = fz.from_user_id
-		WHERE fz.to_user_id::text = $1 AND fzr.created_at > now() - interval '24 hours'
+		WHERE fz.to_user_id::text = $1
+		  AND fzr.created_at > now() - interval '24 hours'
+		  AND fz.reads < fzr.target_count
 		ORDER BY fz.created_at DESC
+		LIMIT 10
 	`, userID)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
