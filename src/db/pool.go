@@ -124,6 +124,105 @@ func Init(ctx context.Context) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_custom_zikirs_user ON custom_zikirs(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_custom_zikirs_user_updated ON custom_zikirs(user_id, created_at DESC)`,
+
+		// Premium entitlement + cloud-save profile.
+		// Server should enforce premium checks in handlers before allowing cloud writes.
+		`CREATE TABLE IF NOT EXISTS user_entitlements (
+			user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			is_premium BOOLEAN NOT NULL DEFAULT false,
+			plan TEXT NOT NULL DEFAULT 'normal',
+			expires_at TIMESTAMPTZ,
+			has_no_ads BOOLEAN NOT NULL DEFAULT false,
+			last_verified_at TIMESTAMPTZ,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_entitlements_premium ON user_entitlements(is_premium)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_entitlements_expires ON user_entitlements(expires_at)`,
+
+		// Snapshot stats for fast profile fetch.
+		`CREATE TABLE IF NOT EXISTS user_profile_stats (
+			user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			total_reads BIGINT NOT NULL DEFAULT 0,
+			level INT NOT NULL DEFAULT 1,
+			xp BIGINT NOT NULL DEFAULT 0,
+			streak_days INT NOT NULL DEFAULT 0,
+			best_streak_days INT NOT NULL DEFAULT 0,
+			daily_target INT NOT NULL DEFAULT 33,
+			daily_reads INT NOT NULL DEFAULT 0,
+			last_read_at TIMESTAMPTZ,
+			last_daily_reset_at TIMESTAMPTZ,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
+
+		// Daily rollups to support streak and charts.
+		`CREATE TABLE IF NOT EXISTS user_daily_stats (
+			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			day DATE NOT NULL,
+			reads INT NOT NULL DEFAULT 0,
+			completed BOOLEAN NOT NULL DEFAULT false,
+			PRIMARY KEY (user_id, day)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_daily_stats_user_day ON user_daily_stats(user_id, day DESC)`,
+
+		`CREATE TABLE IF NOT EXISTS user_daily_meta (
+			user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			last_completed_date DATE,
+			current_streak INT NOT NULL DEFAULT 0,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
+
+		// Custom routines that users create/edit/delete on client.
+		`CREATE TABLE IF NOT EXISTS user_routines (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			background_color TEXT DEFAULT '',
+			icon_color TEXT DEFAULT '',
+			style_key TEXT DEFAULT '',
+			theme_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+			icon_key TEXT DEFAULT '',
+			icon_file TEXT DEFAULT '',
+			sort_order INT NOT NULL DEFAULT 0,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_routines_user ON user_routines(user_id, sort_order, created_at DESC)`,
+
+		`CREATE TABLE IF NOT EXISTS user_routine_items (
+			routine_id UUID NOT NULL REFERENCES user_routines(id) ON DELETE CASCADE,
+			zikir_id TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT 'added' CHECK (source IN ('base', 'added')),
+			sort_order INT NOT NULL DEFAULT 0,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY (routine_id, zikir_id, source)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_routine_items_routine ON user_routine_items(routine_id, source, sort_order)`,
+
+		// Per-zikir user progress map (matches user_progress.json model).
+		`CREATE TABLE IF NOT EXISTS user_zikir_progress (
+			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			zikir_key TEXT NOT NULL,
+			clicks INT NOT NULL DEFAULT 0,
+			repeats INT NOT NULL DEFAULT 0,
+			target_count INT NOT NULL DEFAULT 0,
+			is_favourite BOOLEAN NOT NULL DEFAULT false,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY (user_id, zikir_key)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_zikir_progress_user_updated ON user_zikir_progress(user_id, updated_at DESC)`,
+
+		// Achievements map (matches achievements.json model).
+		`CREATE TABLE IF NOT EXISTS user_achievements (
+			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			achievement_id TEXT NOT NULL,
+			current_value INT NOT NULL DEFAULT 0,
+			unlocked BOOLEAN NOT NULL DEFAULT false,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY (user_id, achievement_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_achievements_user_updated ON user_achievements(user_id, updated_at DESC)`,
 
 		// Group zikir requests (member suggests, owner approves)
 		`CREATE TABLE IF NOT EXISTS group_zikir_requests (
@@ -236,6 +335,8 @@ func Init(ctx context.Context) error {
 	_, _ = pool.Exec(ctx, `ALTER TABLE friend_zikirs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`)
 	_, _ = pool.Exec(ctx, `ALTER TABLE friend_zikirs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ`)
 	_, _ = pool.Exec(ctx, `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE user_daily_stats ADD COLUMN IF NOT EXISTS completed BOOLEAN NOT NULL DEFAULT false`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE user_routines ADD COLUMN IF NOT EXISTS theme_json JSONB NOT NULL DEFAULT '{}'::jsonb`)
 
 	return nil
 }

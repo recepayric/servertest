@@ -57,6 +57,12 @@ func CustomZikirCreate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+	ent, allowed, status, msg := requirePremiumForCloud(ctx, userID)
+	if !allowed {
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": msg, "entitlement": ent})
+		return
+	}
 
 	tagsJSON, _ := json.Marshal(body.Tags)
 	if tagsJSON == nil {
@@ -82,6 +88,101 @@ func CustomZikirCreate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// CustomZikirUpdate updates an existing user zikir.
+// PUT /api/zikirs/custom?id=xxx
+func CustomZikirUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	userID, ok := getUserIDFromRequest(r)
+	if !ok {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "missing or invalid X-Guest-Token"})
+		return
+	}
+
+	zikirID := r.URL.Query().Get("id")
+	if zikirID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "id required"})
+		return
+	}
+
+	var body struct {
+		NameTr        string   `json:"name_tr"`
+		NameEn        string   `json:"name_en"`
+		ReadTr        string   `json:"read_tr"`
+		Arabic        string   `json:"arabic"`
+		TranslationTr string   `json:"translation_tr"`
+		TranslationEn string   `json:"translation_en"`
+		DescriptionTr string   `json:"description_tr"`
+		DescriptionEn string   `json:"description_en"`
+		TargetCount   int      `json:"target_count"`
+		Category      string   `json:"category"`
+		Tags          []string `json:"tags"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if body.Arabic == "" || body.NameTr == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "arabic and name_tr required"})
+		return
+	}
+	if body.TargetCount <= 0 {
+		body.TargetCount = 33
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	ent, allowed, status, msg := requirePremiumForCloud(ctx, userID)
+	if !allowed {
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": msg, "entitlement": ent})
+		return
+	}
+
+	tagsJSON, _ := json.Marshal(body.Tags)
+	if tagsJSON == nil {
+		tagsJSON = []byte("[]")
+	}
+
+	res, err := db.Pool.Exec(ctx, `
+		UPDATE custom_zikirs
+		SET
+			name_tr = $1,
+			name_en = $2,
+			read_tr = $3,
+			arabic = $4,
+			translation_tr = $5,
+			translation_en = $6,
+			description_tr = $7,
+			description_en = $8,
+			target_count = $9,
+			category = $10,
+			tags = $11
+		WHERE id::text = $12 AND user_id = $13
+	`, body.NameTr, body.NameEn, body.ReadTr, body.Arabic, body.TranslationTr, body.TranslationEn, body.DescriptionTr, body.DescriptionEn, body.TargetCount, body.Category, tagsJSON, zikirID, userID)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to update zikir"})
+		return
+	}
+	if res.RowsAffected() == 0 {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "zikir not found or not yours"})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
 // CustomZikirList returns the user's custom zikirs. If ?id=xxx provided, returns single zikir (if accessible).
 // GET /api/zikirs/custom
 // GET /api/zikirs/custom?id=xxx
@@ -101,6 +202,12 @@ func CustomZikirList(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+	ent, allowed, status, msg := requirePremiumForCloud(ctx, userID)
+	if !allowed {
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": msg, "entitlement": ent})
+		return
+	}
 
 	zikirID := r.URL.Query().Get("id")
 	if zikirID != "" {
@@ -210,6 +317,12 @@ func CustomZikirGet(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+	ent, allowed, status, msg := requirePremiumForCloud(ctx, userID)
+	if !allowed {
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": msg, "entitlement": ent})
+		return
+	}
 
 	var e struct {
 		ID            string   `json:"id"`
