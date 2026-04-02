@@ -607,6 +607,13 @@ func GroupsKick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = bumpSocialRevs(ctx, targetID, revGroups)
+	ws.Hub.Push(targetID, map[string]interface{}{
+		"type": "group_member_left",
+		"payload": map[string]interface{}{
+			"group_id": body.GroupID,
+			"user_id":  targetID,
+		},
+	})
 
 	// Push to remaining members so they update without manual fetch
 	memberRows, _ := db.Pool.Query(ctx, `SELECT user_id::text FROM group_members WHERE group_id = $1`, body.GroupID)

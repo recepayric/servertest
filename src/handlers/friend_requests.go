@@ -204,7 +204,7 @@ func FriendsRequestAccept(w http.ResponseWriter, r *http.Request) {
 	_ = bumpSocialRevs(ctx, fromID, revFriends, revFriendSent)
 
 	var friendCode, friendName string
-	_ = db.Pool.QueryRow(ctx, `SELECT friend_code, COALESCE(display_name, '') FROM users WHERE id = $1`, fromID).Scan(&friendCode, &friendName)
+	_ = db.Pool.QueryRow(ctx, `SELECT friend_code, COALESCE(display_name, '') FROM users WHERE id = $1`, userID).Scan(&friendCode, &friendName)
 	ws.Hub.Push(fromID, map[string]interface{}{
 		"type": "friend_request_accepted",
 		"payload": map[string]string{

@@ -74,8 +74,8 @@ func (h *hub) Push(userID string, payload interface{}) {
 	}
 	metrics.AddBytesOut(uint64(len(data)))
 	h.mu.RLock()
+	defer h.mu.RUnlock()
 	channels := h.conns[userID]
-	h.mu.RUnlock()
 	for _, send := range channels {
 		select {
 		case send <- data:

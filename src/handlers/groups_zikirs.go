@@ -58,6 +58,23 @@ func GroupsLeave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = bumpSocialRevs(ctx, userID, revGroups)
+	rows, _ := db.Pool.Query(ctx, `SELECT user_id::text FROM group_members WHERE group_id = $1`, body.GroupID)
+	if rows != nil {
+		payload := map[string]interface{}{
+			"type": "group_member_left",
+			"payload": map[string]interface{}{
+				"group_id": body.GroupID,
+				"user_id":  userID,
+			},
+		}
+		for rows.Next() {
+			var otherID string
+			if err := rows.Scan(&otherID); err == nil {
+				ws.Hub.Push(otherID, payload)
+			}
+		}
+		rows.Close()
+	}
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
