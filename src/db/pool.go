@@ -50,6 +50,20 @@ func Init(ctx context.Context) error {
 	_, _ = pool.Exec(ctx, `ALTER TABLE group_zikir_requests ADD COLUMN IF NOT EXISTS accepted_by_user_id UUID`)
 	_, _ = pool.Exec(ctx, `ALTER TABLE group_zikir_requests ADD COLUMN IF NOT EXISTS refused_by_user_id UUID`)
 	_, _ = pool.Exec(ctx, `ALTER TABLE group_zikir_requests ADD COLUMN IF NOT EXISTS group_zikir_id UUID`)
+
+	// External identity mapping (Unity Authentication, etc.) for linking accounts.
+	// provider+external_id uniquely identify a user identity, which maps to an internal users.id.
+	_, _ = pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS user_identities (
+			provider TEXT NOT NULL,
+			external_id TEXT NOT NULL,
+			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY(provider, external_id)
+		)
+	`)
+	_, _ = pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_user_identities_user ON user_identities(user_id)`)
+	_, _ = pool.Exec(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_user_identities_user_provider ON user_identities(user_id, provider)`)
 	// Per-member accept/refuse: each member responds individually to a request
 	_, _ = pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS group_zikir_request_responses (
 		request_id UUID NOT NULL REFERENCES group_zikir_requests(id) ON DELETE CASCADE,
@@ -64,6 +78,8 @@ func Init(ctx context.Context) error {
 	_, _ = pool.Exec(ctx, `ALTER TABLE group_zikirs ADD COLUMN IF NOT EXISTS request_id UUID`)
 	_, _ = pool.Exec(ctx, `ALTER TABLE groups ADD COLUMN IF NOT EXISTS icon_index INTEGER NOT NULL DEFAULT -1`)
 	_, _ = pool.Exec(ctx, `ALTER TABLE groups ADD COLUMN IF NOT EXISTS icon_key TEXT NOT NULL DEFAULT ''`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE friend_zikirs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE friend_zikirs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ`)
 	for _, stmt := range []string{
 		`CREATE TABLE IF NOT EXISTS groups (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL, owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
 		`CREATE INDEX IF NOT EXISTS idx_groups_owner ON groups(owner_id)`,
@@ -89,9 +105,11 @@ func Init(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_friend_zikir_requests_to ON friend_zikir_requests(to_user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_friend_zikir_requests_from ON friend_zikir_requests(from_user_id)`,
 		// Friend zikirs (accepted; to_user can read, from_user can see progress)
-		`CREATE TABLE IF NOT EXISTS friend_zikirs (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), request_id UUID NOT NULL UNIQUE REFERENCES friend_zikir_requests(id) ON DELETE CASCADE, to_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, from_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, zikir_type TEXT NOT NULL, zikir_ref TEXT NOT NULL, target_count INT NOT NULL DEFAULT 33, reads INT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+		`CREATE TABLE IF NOT EXISTS friend_zikirs (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), request_id UUID NOT NULL UNIQUE REFERENCES friend_zikir_requests(id) ON DELETE CASCADE, to_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, from_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, zikir_type TEXT NOT NULL, zikir_ref TEXT NOT NULL, target_count INT NOT NULL DEFAULT 33, reads INT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), completed_at TIMESTAMPTZ)`,
 		`CREATE INDEX IF NOT EXISTS idx_friend_zikirs_to ON friend_zikirs(to_user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_friend_zikirs_from ON friend_zikirs(from_user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_friend_zikirs_updated_at ON friend_zikirs(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_friend_zikirs_completed_at ON friend_zikirs(completed_at)`,
 		// Group zikir requests (member suggests, owner approves)
 		`CREATE TABLE IF NOT EXISTS group_zikir_requests (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE, from_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, zikir_type TEXT NOT NULL CHECK (zikir_type IN ('builtin','custom')), zikir_ref TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','refused')), created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
 		`CREATE INDEX IF NOT EXISTS idx_group_zikir_requests_group ON group_zikir_requests(group_id)`,

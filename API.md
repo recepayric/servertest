@@ -24,7 +24,28 @@ Base URL: `http://localhost:8080` (or your deploy URL)
 
 **POST** `/api/guest/register`
 
-Creates a new user. No body required.
+Creates a guest user (or returns an existing one).
+
+Body is optional. If provided, it is used for Unity Authentication identity linking:
+
+```json
+{
+  "auth_provider": "guest" | "apple" | "google" | "facebook",
+  "unity_player_id": "string",
+  "unity_access_token": "string" // optional; backend currently ignores
+}
+```
+
+If `X-Guest-Token` is present, the backend will treat this request as linking a new identity to the existing guest account.
+
+When linking a provider identity that is already linked to another account, backend returns `409` with:
+- `code: "identity_conflict"`
+- `current_account` (account from your `X-Guest-Token`)
+- `linked_account` (account already owning that provider identity)
+
+Then retry with:
+- `conflict_policy: "switch"` to switch this device to `linked_account`
+- `conflict_policy: "keep"` to move provider identity onto `current_account`
 
 **Response:**
 ```json
@@ -39,6 +60,14 @@ Store `guest_token` and use as `X-Guest-Token` for all later requests.
 
 ---
 
+### Link Identity (Alias Endpoint)
+
+**POST** `/api/auth/link`
+
+Same request/response semantics as `/api/guest/register`, intended for explicit account-linking flows in client UI.
+
+---
+
 ### Get Current User
 
 **GET** `/api/me`  
@@ -50,6 +79,30 @@ Store `guest_token` and use as `X-Guest-Token` for all later requests.
   "user_id": "uuid",
   "friend_code": "3x7k2m",
   "display_name": "User#3x7k2m"
+}
+```
+
+---
+
+### Update Display Name
+
+**POST** `/api/me/display-name`  
+**Header:** `X-Guest-Token`  
+**Body:**
+```json
+{
+  "display_name": "My New Name"
+}
+```
+
+`display_name` is trimmed and limited to 64 characters.
+
+**Response:** same shape as `GET /api/me`:
+```json
+{
+  "user_id": "uuid",
+  "friend_code": "3x7k2m",
+  "display_name": "My New Name"
 }
 ```
 
@@ -549,7 +602,7 @@ Owner or who added can remove.
 
 Send a zikir to a friend. They accept or refuse. Accepted zikirs appear in their list and can be read.
 
-**24h expiry:** Same as group – requests and accepted zikirs expire 24h after request creation.
+**Sync note:** Progress is stored in the database (`friend_zikirs.reads`) and updated on every read. Your app should re-fetch list endpoints on startup/reopen to resync.
 
 ---
 
@@ -648,8 +701,43 @@ Send a zikir to a friend. They accept or refuse. Accepted zikirs appear in their
       "target_count": 33,
       "reads": 5,
       "created_at": "...",
+      "updated_at": "...",
+      "completed_at": "",
       "friend_code": "abc",
       "display_name": "..."
+    }
+  ]
+}
+```
+
+---
+
+### List Sent Friend Zikirs (Outgoing, includes progress/activity)
+
+**GET** `/api/zikirs/friend/sent`
+
+Includes `reads` when accepted and being read, plus `updated_at` and `completed_at` for activity UI.
+
+**Response:**
+```json
+{
+  "sent": [
+    {
+      "request_id": "uuid",
+      "to_user_id": "uuid",
+      "zikir_type": "builtin",
+      "zikir_ref": "zikir_id",
+      "zikir_name": "Subhanallah",
+      "target_count": 33,
+      "status": "accepted",
+      "created_at": "...",
+      "to_friend_code": "abc",
+      "to_display_name": "...",
+      "friend_zikir_id": "uuid",
+      "reads": 30,
+      "is_completed": false,
+      "updated_at": "...",
+      "completed_at": ""
     }
   ]
 }

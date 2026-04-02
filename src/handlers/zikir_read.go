@@ -161,19 +161,27 @@ func handleFriendZikirRead(ctx context.Context, userID, friendZikirID string, co
 
 	var fromUserID string
 	err := db.Pool.QueryRow(ctx, `
-		SELECT fz.from_user_id::text FROM friend_zikirs fz
-		JOIN friend_zikir_requests fzr ON fzr.id = fz.request_id
+		SELECT fz.from_user_id::text
+		FROM friend_zikirs fz
 		WHERE fz.id::text = $1 AND fz.to_user_id::text = $2
-		AND fzr.created_at > now() - interval '24 hours'
 	`, friendZikirID, userID).Scan(&fromUserID)
 	if err != nil {
-		log.Printf("zikir_read: friend zikir not found, not receiver, or expired: %v", err)
+		log.Printf("zikir_read: friend zikir not found or not receiver: %v", err)
 		return
 	}
 
 	var reads int
 	err = db.Pool.QueryRow(ctx, `
-		UPDATE friend_zikirs SET reads = reads + $1 WHERE id::text = $2 RETURNING reads
+		UPDATE friend_zikirs
+		SET
+			reads = LEAST(reads + $1, target_count),
+			updated_at = now(),
+			completed_at = CASE
+				WHEN completed_at IS NULL AND reads + $1 >= target_count THEN now()
+				ELSE completed_at
+			END
+		WHERE id::text = $2
+		RETURNING reads
 	`, count, friendZikirID).Scan(&reads)
 	if err != nil {
 		log.Printf("zikir_read: update friend zikir: %v", err)

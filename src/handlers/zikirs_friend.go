@@ -315,16 +315,17 @@ func FriendZikirSentList(w http.ResponseWriter, r *http.Request) {
 			COALESCE(u.display_name, '') AS to_display_name,
 			COALESCE(fz.id::text, '') AS friend_zikir_id,
 			COALESCE(fz.reads, 0) AS reads,
-			(fz.id IS NOT NULL AND fz.reads >= fzr.target_count) AS is_completed
+			(fz.id IS NOT NULL AND fz.reads >= fzr.target_count) AS is_completed,
+			COALESCE(fz.updated_at::text, '') AS updated_at,
+			COALESCE(fz.completed_at::text, '') AS completed_at
 		FROM friend_zikir_requests fzr
 		JOIN users u ON u.id = fzr.to_user_id
 		LEFT JOIN friend_zikirs fz ON fz.request_id = fzr.id
 		LEFT JOIN custom_zikirs cz
 			ON cz.id::text = fzr.zikir_ref AND fzr.zikir_type = 'custom'
 		WHERE fzr.from_user_id::text = $1
-		  AND fzr.created_at > now() - interval '24 hours'
 		ORDER BY fzr.created_at DESC
-		LIMIT 10
+		LIMIT 50
 	`, userID)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -347,6 +348,8 @@ func FriendZikirSentList(w http.ResponseWriter, r *http.Request) {
 		FriendZikirID string `json:"friend_zikir_id"`
 		Reads         int    `json:"reads"`
 		IsCompleted   bool   `json:"is_completed"`
+		UpdatedAt     string `json:"updated_at"`
+		CompletedAt   string `json:"completed_at"`
 	}
 
 	var list []sentEntry
@@ -357,6 +360,7 @@ func FriendZikirSentList(w http.ResponseWriter, r *http.Request) {
 			&e.TargetCount, &e.Status, &e.CreatedAt,
 			&e.ToFriendCode, &e.ToDisplayName,
 			&e.FriendZikirID, &e.Reads, &e.IsCompleted,
+			&e.UpdatedAt, &e.CompletedAt,
 		); err != nil {
 			continue
 		}
@@ -390,15 +394,15 @@ func FriendZikirList(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := db.Pool.Query(ctx, `
 		SELECT fz.id::text, fz.from_user_id::text, fz.zikir_type, fz.zikir_ref, fz.target_count, fz.reads, fz.created_at::text,
+		       fz.updated_at::text, COALESCE(fz.completed_at::text, '') AS completed_at,
 		       u.friend_code, COALESCE(u.display_name, '') as display_name
 		FROM friend_zikirs fz
 		JOIN friend_zikir_requests fzr ON fzr.id = fz.request_id
 		JOIN users u ON u.id = fz.from_user_id
 		WHERE fz.to_user_id::text = $1
-		  AND fzr.created_at > now() - interval '24 hours'
 		  AND fz.reads < fzr.target_count
-		ORDER BY fz.created_at DESC
-		LIMIT 10
+		ORDER BY fz.updated_at DESC
+		LIMIT 50
 	`, userID)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -415,6 +419,8 @@ func FriendZikirList(w http.ResponseWriter, r *http.Request) {
 		TargetCount int    `json:"target_count"`
 		Reads       int    `json:"reads"`
 		CreatedAt   string `json:"created_at"`
+		UpdatedAt   string `json:"updated_at"`
+		CompletedAt string `json:"completed_at"`
 		FriendCode  string `json:"friend_code"`
 		DisplayName string `json:"display_name"`
 	}
@@ -422,7 +428,7 @@ func FriendZikirList(w http.ResponseWriter, r *http.Request) {
 	var list []zikirEntry
 	for rows.Next() {
 		var e zikirEntry
-		if err := rows.Scan(&e.ID, &e.FromUserID, &e.ZikirType, &e.ZikirRef, &e.TargetCount, &e.Reads, &e.CreatedAt, &e.FriendCode, &e.DisplayName); err != nil {
+		if err := rows.Scan(&e.ID, &e.FromUserID, &e.ZikirType, &e.ZikirRef, &e.TargetCount, &e.Reads, &e.CreatedAt, &e.UpdatedAt, &e.CompletedAt, &e.FriendCode, &e.DisplayName); err != nil {
 			continue
 		}
 		list = append(list, e)
