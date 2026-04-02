@@ -84,6 +84,29 @@ func Init(ctx context.Context) error {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
 
+		// Friend system (social graph + pending requests)
+		`CREATE TABLE IF NOT EXISTS friendships (
+			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			friend_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY (user_id, friend_id),
+			CHECK (user_id <> friend_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_friendships_user ON friendships(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_friendships_friend ON friendships(friend_id)`,
+
+		`CREATE TABLE IF NOT EXISTS friendship_requests (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			from_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			to_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','refused')),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			CHECK (from_user_id <> to_user_id),
+			UNIQUE(from_user_id, to_user_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_friendship_requests_to ON friendship_requests(to_user_id, status, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_friendship_requests_from ON friendship_requests(from_user_id, status, created_at DESC)`,
+
 		// Groups
 		`CREATE TABLE IF NOT EXISTS groups (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
