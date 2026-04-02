@@ -71,6 +71,17 @@ func FriendsRequest(w http.ResponseWriter, r *http.Request) {
 		_, _ = db.Pool.Exec(ctx, `INSERT INTO friendships (user_id, friend_id) VALUES ($1, $2), ($2, $1) ON CONFLICT (user_id, friend_id) DO NOTHING`, fromID, toID)
 		_ = bumpSocialRevs(ctx, fromID, revFriends, revFriendPending, revFriendSent)
 		_ = bumpSocialRevs(ctx, toID, revFriends, revFriendPending, revFriendSent)
+		var fromCode, fromName string
+		_ = db.Pool.QueryRow(ctx, `SELECT friend_code, COALESCE(display_name, '') FROM users WHERE id = $1`, fromID).Scan(&fromCode, &fromName)
+		ws.Hub.Push(toID, map[string]interface{}{
+			"type": "friend_request_accepted",
+			"payload": map[string]string{
+				"request_id":   reverseRequestID,
+				"friend_id":    fromID,
+				"friend_code":  fromCode,
+				"display_name": fromName,
+			},
+		})
 		var toCode, toName string
 		_ = db.Pool.QueryRow(ctx, `SELECT friend_code, COALESCE(display_name, '') FROM users WHERE id = $1`, toID).Scan(&toCode, &toName)
 		w.WriteHeader(http.StatusOK)
@@ -194,6 +205,15 @@ func FriendsRequestAccept(w http.ResponseWriter, r *http.Request) {
 
 	var friendCode, friendName string
 	_ = db.Pool.QueryRow(ctx, `SELECT friend_code, COALESCE(display_name, '') FROM users WHERE id = $1`, fromID).Scan(&friendCode, &friendName)
+	ws.Hub.Push(fromID, map[string]interface{}{
+		"type": "friend_request_accepted",
+		"payload": map[string]string{
+			"request_id":   body.RequestID,
+			"friend_id":    userID,
+			"friend_code":  friendCode,
+			"display_name": friendName,
+		},
+	})
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -252,6 +272,12 @@ func FriendsRequestRefuse(w http.ResponseWriter, r *http.Request) {
 	_ = db.Pool.QueryRow(ctx, `SELECT from_user_id::text FROM friendship_requests WHERE id::text = $1`, body.RequestID).Scan(&fromUserID)
 	_ = bumpSocialRevs(ctx, userID, revFriendPending)
 	_ = bumpSocialRevs(ctx, fromUserID, revFriendSent)
+	ws.Hub.Push(fromUserID, map[string]interface{}{
+		"type": "friend_request_refused",
+		"payload": map[string]string{
+			"request_id": body.RequestID,
+		},
+	})
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
