@@ -57,6 +57,7 @@ func GroupsLeave(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to leave"})
 		return
 	}
+	_ = bumpSocialRevs(ctx, userID, revGroups)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

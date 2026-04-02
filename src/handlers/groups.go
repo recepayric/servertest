@@ -53,6 +53,7 @@ func GroupsCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, _ = db.Pool.Exec(ctx, `INSERT INTO group_members (group_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, groupID, userID)
+	_ = bumpSocialRevs(ctx, userID, revGroups)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -268,6 +269,8 @@ func GroupsInvite(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to create invite"})
 		return
 	}
+	_ = bumpSocialRevs(ctx, userID, revGroupSent)
+	_ = bumpSocialRevs(ctx, toID, revGroupPending)
 
 	var groupName, fromCode, fromName, iconKey string
 	var iconIndex int
@@ -334,6 +337,10 @@ func GroupsInviteAccept(w http.ResponseWriter, r *http.Request) {
 
 	_, _ = db.Pool.Exec(ctx, `UPDATE group_invite_requests SET status = 'accepted' WHERE id::text = $1`, body.RequestID)
 	_, _ = db.Pool.Exec(ctx, `INSERT INTO group_members (group_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, groupID, userID)
+	var fromID string
+	_ = db.Pool.QueryRow(ctx, `SELECT from_user_id::text FROM group_invite_requests WHERE id::text = $1`, body.RequestID).Scan(&fromID)
+	_ = bumpSocialRevs(ctx, userID, revGroups, revGroupPending)
+	_ = bumpSocialRevs(ctx, fromID, revGroupSent)
 
 	var groupName, friendCode, displayName string
 	_ = db.Pool.QueryRow(ctx, `SELECT name FROM groups WHERE id::text = $1`, groupID).Scan(&groupName)
@@ -408,6 +415,10 @@ func GroupsInviteRefuse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, _ = db.Pool.Exec(ctx, `UPDATE group_invite_requests SET status = 'refused' WHERE id::text = $1`, body.RequestID)
+	var fromID string
+	_ = db.Pool.QueryRow(ctx, `SELECT from_user_id::text FROM group_invite_requests WHERE id::text = $1`, body.RequestID).Scan(&fromID)
+	_ = bumpSocialRevs(ctx, userID, revGroupPending)
+	_ = bumpSocialRevs(ctx, fromID, revGroupSent)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -595,6 +606,7 @@ func GroupsKick(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to kick"})
 		return
 	}
+	_ = bumpSocialRevs(ctx, targetID, revGroups)
 
 	// Push to remaining members so they update without manual fetch
 	memberRows, _ := db.Pool.Query(ctx, `SELECT user_id::text FROM group_members WHERE group_id = $1`, body.GroupID)

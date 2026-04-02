@@ -59,6 +59,8 @@ func FriendsRemove(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to remove friend"})
 		return
 	}
+	_ = bumpSocialRevs(ctx, userID, revFriends)
+	_ = bumpSocialRevs(ctx, friendID, revFriends)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

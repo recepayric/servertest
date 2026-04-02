@@ -73,6 +73,17 @@ func Init(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_user_identities_user ON user_identities(user_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_identities_user_provider ON user_identities(user_id, provider)`,
 
+		`CREATE TABLE IF NOT EXISTS user_social_meta (
+			user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			friends_rev BIGINT NOT NULL DEFAULT 0,
+			friend_pending_rev BIGINT NOT NULL DEFAULT 0,
+			friend_sent_rev BIGINT NOT NULL DEFAULT 0,
+			groups_rev BIGINT NOT NULL DEFAULT 0,
+			group_pending_rev BIGINT NOT NULL DEFAULT 0,
+			group_sent_rev BIGINT NOT NULL DEFAULT 0,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
+
 		// Groups
 		`CREATE TABLE IF NOT EXISTS groups (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -337,6 +348,12 @@ func Init(ctx context.Context) error {
 	_, _ = pool.Exec(ctx, `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT`)
 	_, _ = pool.Exec(ctx, `ALTER TABLE user_daily_stats ADD COLUMN IF NOT EXISTS completed BOOLEAN NOT NULL DEFAULT false`)
 	_, _ = pool.Exec(ctx, `ALTER TABLE user_routines ADD COLUMN IF NOT EXISTS theme_json JSONB NOT NULL DEFAULT '{}'::jsonb`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE user_social_meta ADD COLUMN IF NOT EXISTS friends_rev BIGINT NOT NULL DEFAULT 0`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE user_social_meta ADD COLUMN IF NOT EXISTS friend_pending_rev BIGINT NOT NULL DEFAULT 0`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE user_social_meta ADD COLUMN IF NOT EXISTS friend_sent_rev BIGINT NOT NULL DEFAULT 0`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE user_social_meta ADD COLUMN IF NOT EXISTS groups_rev BIGINT NOT NULL DEFAULT 0`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE user_social_meta ADD COLUMN IF NOT EXISTS group_pending_rev BIGINT NOT NULL DEFAULT 0`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE user_social_meta ADD COLUMN IF NOT EXISTS group_sent_rev BIGINT NOT NULL DEFAULT 0`)
 
 	return nil
 }

@@ -49,6 +49,7 @@ func NewMux() http.Handler {
 			"GET /api/cloud/routines":                 handlers.CloudRoutinesList,
 			"POST /api/cloud/routines/upsert":         handlers.CloudRoutinesUpsert,
 			"POST /api/cloud/routines/delete":         handlers.CloudRoutinesDelete,
+			"POST /api/social/sync":                   handlers.SocialSync,
 			"GET /api/friends":                        handlers.FriendsList,
 			"POST /api/friends/remove":                handlers.FriendsRemove,
 			"POST /api/friends/request":               handlers.FriendsRequest,

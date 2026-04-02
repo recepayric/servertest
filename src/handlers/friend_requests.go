@@ -69,6 +69,8 @@ func FriendsRequest(w http.ResponseWriter, r *http.Request) {
 		// B already sent to A - auto-accept and create friendship
 		_, _ = db.Pool.Exec(ctx, `UPDATE friendship_requests SET status = 'accepted' WHERE id::text = $1`, reverseRequestID)
 		_, _ = db.Pool.Exec(ctx, `INSERT INTO friendships (user_id, friend_id) VALUES ($1, $2), ($2, $1) ON CONFLICT (user_id, friend_id) DO NOTHING`, fromID, toID)
+		_ = bumpSocialRevs(ctx, fromID, revFriends, revFriendPending, revFriendSent)
+		_ = bumpSocialRevs(ctx, toID, revFriends, revFriendPending, revFriendSent)
 		var toCode, toName string
 		_ = db.Pool.QueryRow(ctx, `SELECT friend_code, COALESCE(display_name, '') FROM users WHERE id = $1`, toID).Scan(&toCode, &toName)
 		w.WriteHeader(http.StatusOK)
@@ -101,6 +103,8 @@ func FriendsRequest(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to create request"})
 		return
 	}
+	_ = bumpSocialRevs(ctx, fromID, revFriendSent)
+	_ = bumpSocialRevs(ctx, toID, revFriendPending)
 
 	// Push to recipient via WebSocket
 	var fromCode, fromName string
@@ -185,6 +189,8 @@ func FriendsRequestAccept(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to add friend"})
 		return
 	}
+	_ = bumpSocialRevs(ctx, userID, revFriends, revFriendPending)
+	_ = bumpSocialRevs(ctx, fromID, revFriends, revFriendSent)
 
 	var friendCode, friendName string
 	_ = db.Pool.QueryRow(ctx, `SELECT friend_code, COALESCE(display_name, '') FROM users WHERE id = $1`, fromID).Scan(&friendCode, &friendName)
@@ -242,6 +248,10 @@ func FriendsRequestRefuse(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "request not found or already handled"})
 		return
 	}
+	var fromUserID string
+	_ = db.Pool.QueryRow(ctx, `SELECT from_user_id::text FROM friendship_requests WHERE id::text = $1`, body.RequestID).Scan(&fromUserID)
+	_ = bumpSocialRevs(ctx, userID, revFriendPending)
+	_ = bumpSocialRevs(ctx, fromUserID, revFriendSent)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
