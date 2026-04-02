@@ -312,6 +312,7 @@ func CloudRoutinesList(w http.ResponseWriter, r *http.Request) {
 		ORDER BY sort_order ASC, created_at ASC
 	`, userID)
 	if err != nil {
+		logDBError("CloudRoutinesList", "query_user_routines", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to load routines"})
 		return
@@ -319,42 +320,56 @@ func CloudRoutinesList(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	var list []cloudRoutine
+	var routineIDs []string
+	routineIndexByID := make(map[string]int)
 	for rows.Next() {
 		var e cloudRoutine
 		if err := rows.Scan(&e.ID, &e.Name, &e.Description, &e.BackgroundColor, &e.IconColor, &e.StyleKey, &e.ThemeJSON, &e.IconKey, &e.IconFile, &e.SortOrder, &e.UpdatedAt); err != nil {
+			logDBError("CloudRoutinesList", "scan_user_routines", err)
 			continue
 		}
 		e.BaseZikirIDs = []string{}
 		e.AddedZikirIDs = []string{}
+		routineIndexByID[e.ID] = len(list)
+		routineIDs = append(routineIDs, e.ID)
 		list = append(list, e)
 	}
 	if list == nil {
 		list = []cloudRoutine{}
 	}
 
-	// Fill items per routine.
-	for i := range list {
+	// Batch-load all routine items to avoid N+1 query pattern.
+	if len(routineIDs) > 0 {
 		itemRows, err := db.Pool.Query(ctx, `
-			SELECT zikir_id, source
+			SELECT routine_id::text, zikir_id, source
 			FROM user_routine_items
-			WHERE routine_id::text = $1
-			ORDER BY sort_order ASC, created_at ASC
-		`, list[i].ID)
+			WHERE routine_id::text = ANY($1::text[])
+			ORDER BY routine_id::text ASC, source ASC, sort_order ASC, created_at ASC
+		`, routineIDs)
 		if err != nil {
-			continue
+			logDBError("CloudRoutinesList", "query_user_routine_items_batch", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to load routine items"})
+			return
 		}
+		defer itemRows.Close()
+
 		for itemRows.Next() {
-			var zikirID, source string
-			if err := itemRows.Scan(&zikirID, &source); err != nil {
+			var routineID, zikirID, source string
+			if err := itemRows.Scan(&routineID, &zikirID, &source); err != nil {
+				logDBError("CloudRoutinesList", "scan_user_routine_items_batch", err)
+				continue
+			}
+			idx, ok := routineIndexByID[routineID]
+			if !ok {
 				continue
 			}
 			if source == "base" {
-				list[i].BaseZikirIDs = append(list[i].BaseZikirIDs, zikirID)
+				list[idx].BaseZikirIDs = append(list[idx].BaseZikirIDs, zikirID)
 			} else {
-				list[i].AddedZikirIDs = append(list[i].AddedZikirIDs, zikirID)
+				list[idx].AddedZikirIDs = append(list[idx].AddedZikirIDs, zikirID)
 			}
 		}
-		itemRows.Close()
 	}
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{

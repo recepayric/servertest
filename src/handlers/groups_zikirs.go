@@ -126,6 +126,7 @@ func GroupsZikirsList(w http.ResponseWriter, r *http.Request) {
 		ORDER BY gz.created_at ASC
 	`, groupID)
 	if err != nil {
+		logDBError("GroupsZikirsList", "query_group_zikirs", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to list zikirs"})
 		return
@@ -144,11 +145,13 @@ func GroupsZikirsList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var list []zikirRef
+	var zikirIDs []string
 	for rows.Next() {
 		var z zikirRef
 		var mode string
 		var targetCount int
 		if err := rows.Scan(&z.ID, &z.ZikirType, &z.ZikirRef, &mode, &targetCount, &z.AddedByUserID, &z.CreatedAt); err != nil {
+			logDBError("GroupsZikirsList", "scan_group_zikirs", err)
 			continue
 		}
 		z.Mode = mode
@@ -160,24 +163,52 @@ func GroupsZikirsList(w http.ResponseWriter, r *http.Request) {
 			z.TargetCount = 100
 		}
 		z.Progress = make(map[string]int)
-		if z.Mode == "pooled" {
-			var total int
-			_ = db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(reads), 0) FROM group_zikir_progress WHERE group_zikir_id = $1`, z.ID).Scan(&total)
-			z.Progress["total"] = total
+		list = append(list, z)
+		zikirIDs = append(zikirIDs, z.ID)
+	}
+
+	progressByZikir := make(map[string]map[string]int, len(zikirIDs))
+	if len(zikirIDs) > 0 {
+		progressRows, err := db.Pool.Query(ctx, `
+			SELECT group_zikir_id::text, user_id::text, reads
+			FROM group_zikir_progress
+			WHERE group_zikir_id::text = ANY($1::text[])
+		`, zikirIDs)
+		if err != nil {
+			logDBError("GroupsZikirsList", "query_group_zikir_progress_batch", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to list zikir progress"})
+			return
+		}
+		defer progressRows.Close()
+
+		for progressRows.Next() {
+			var zikirID, uid string
+			var reads int
+			if err := progressRows.Scan(&zikirID, &uid, &reads); err != nil {
+				logDBError("GroupsZikirsList", "scan_group_zikir_progress_batch", err)
+				continue
+			}
+			if progressByZikir[zikirID] == nil {
+				progressByZikir[zikirID] = make(map[string]int)
+			}
+			progressByZikir[zikirID][uid] = reads
+		}
+	}
+
+	for i := range list {
+		pm := progressByZikir[list[i].ID]
+		if list[i].Mode == "pooled" {
+			total := 0
+			for _, reads := range pm {
+				total += reads
+			}
+			list[i].Progress["total"] = total
 		} else {
-			rows2, _ := db.Pool.Query(ctx, `SELECT user_id::text, reads FROM group_zikir_progress WHERE group_zikir_id = $1`, z.ID)
-			if rows2 != nil {
-				for rows2.Next() {
-					var uid string
-					var r int
-					if err := rows2.Scan(&uid, &r); err == nil {
-						z.Progress[uid] = r
-					}
-				}
-				rows2.Close()
+			for uid, reads := range pm {
+				list[i].Progress[uid] = reads
 			}
 		}
-		list = append(list, z)
 	}
 	if list == nil {
 		list = []zikirRef{}
@@ -512,6 +543,7 @@ func GroupsZikirRequestsList(w http.ResponseWriter, r *http.Request) {
 		ORDER BY gzr.created_at DESC
 	`, groupID)
 	if err != nil {
+		logDBError("GroupsZikirRequestsList", "query_group_zikir_requests", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to list requests"})
 		return
@@ -542,48 +574,64 @@ func GroupsZikirRequestsList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var list []reqEntry
+	var requestIDs []string
+	reqIndexByID := make(map[string]int)
 	for rows.Next() {
 		var e reqEntry
 		if err := rows.Scan(&e.RequestID, &e.GroupID, &e.FromUserID, &e.ZikirType, &e.ZikirRef, &e.Mode, &e.TargetCount, &e.CreatedAt, &e.FriendCode, &e.DisplayName); err != nil {
+			logDBError("GroupsZikirRequestsList", "scan_group_zikir_requests", err)
 			continue
 		}
 		e.AcceptedBy = []userInfo{}
 		e.RefusedBy = []userInfo{}
+		reqIndexByID[e.RequestID] = len(list)
+		requestIDs = append(requestIDs, e.RequestID)
+		list = append(list, e)
+	}
 
-		// Fetch per-member responses (accepted_by, refused_by, my_response, my_reads)
-		respRows, _ := db.Pool.Query(ctx, `
-			SELECT r.user_id::text, r.response, r.reads, u.friend_code, COALESCE(u.display_name, '')
+	if len(requestIDs) > 0 {
+		respRows, err := db.Pool.Query(ctx, `
+			SELECT r.request_id::text, r.user_id::text, r.response, r.reads, u.friend_code, COALESCE(u.display_name, '')
 			FROM group_zikir_request_responses r
 			JOIN users u ON u.id = r.user_id
-			WHERE r.request_id::text = $1
-		`, e.RequestID)
-		if respRows != nil {
-			for respRows.Next() {
-				var uid, resp, fc, dn string
-				var reads int
-				if err := respRows.Scan(&uid, &resp, &reads, &fc, &dn); err != nil {
-					continue
+			WHERE r.request_id::text = ANY($1::text[])
+		`, requestIDs)
+		if err != nil {
+			logDBError("GroupsZikirRequestsList", "query_group_zikir_request_responses_batch", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to list request responses"})
+			return
+		}
+		defer respRows.Close()
+
+		for respRows.Next() {
+			var reqID, uid, resp, fc, dn string
+			var reads int
+			if err := respRows.Scan(&reqID, &uid, &resp, &reads, &fc, &dn); err != nil {
+				logDBError("GroupsZikirRequestsList", "scan_group_zikir_request_responses_batch", err)
+				continue
+			}
+			idx, ok := reqIndexByID[reqID]
+			if !ok {
+				continue
+			}
+			ui := userInfo{UserID: uid, FriendCode: fc, DisplayName: dn}
+			if resp == "accepted" {
+				ui.Reads = reads
+				list[idx].AcceptedBy = append(list[idx].AcceptedBy, ui)
+				if uid == userID {
+					myResp := "accepted"
+					list[idx].MyResponse = &myResp
+					list[idx].MyReads = reads
 				}
-				ui := userInfo{UserID: uid, FriendCode: fc, DisplayName: dn}
-				if resp == "accepted" {
-					ui.Reads = reads
-					e.AcceptedBy = append(e.AcceptedBy, ui)
-					if uid == userID {
-						myResp := "accepted"
-						e.MyResponse = &myResp
-						e.MyReads = reads
-					}
-				} else {
-					e.RefusedBy = append(e.RefusedBy, ui)
-					if uid == userID {
-						myResp := "refused"
-						e.MyResponse = &myResp
-					}
+			} else {
+				list[idx].RefusedBy = append(list[idx].RefusedBy, ui)
+				if uid == userID {
+					myResp := "refused"
+					list[idx].MyResponse = &myResp
 				}
 			}
-			respRows.Close()
 		}
-		list = append(list, e)
 	}
 	if list == nil {
 		list = []reqEntry{}
