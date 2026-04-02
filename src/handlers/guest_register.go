@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -71,6 +72,16 @@ func handleIdentityAuth(w http.ResponseWriter, r *http.Request) {
 	externalID := strings.TrimSpace(body.UnityPlayerID)
 	conflictPolicy := strings.ToLower(strings.TrimSpace(body.ConflictPolicy))
 	currentGuestToken := strings.TrimSpace(r.Header.Get(guestTokenHeader))
+
+	log.Printf(
+		"identity_auth path=%s provider=%q external_id_present=%t conflict_policy=%q has_x_guest_token=%t x_guest_token_len=%d",
+		r.URL.Path,
+		provider,
+		externalID != "",
+		conflictPolicy,
+		currentGuestToken != "",
+		len(currentGuestToken),
+	)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
